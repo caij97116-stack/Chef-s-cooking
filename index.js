@@ -24,12 +24,13 @@ const defaultSettings = Object.freeze({
   rewrite: '',
   verdict: '',
   playMode: 'none',
+  thrifty: true,
   showFab: true,
   fabPos: null,
   panelPos: null,
   panelOpen: false,
   cache: {},
-  stats: { calls: 0, tokens: 0 }
+  stats: { calls: 0, tokens: 0, saved: 0 }
 });
 
 const settingsTpl = `
@@ -41,7 +42,8 @@ const settingsTpl = `
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
     <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>在页面上显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
-    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开面板。本会话已调用模型 <b id="sd_stats_root">0</b> 次。</div>
+    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开面板。本会话已调用模型 <b id="sd_stats_root">0 次</b>。</div>
+    <div class="sd-note">省 API：同样的输入只用调一次；面板里默认开着「省流」，七遍读只花一次调用；面板顶部会显示命中缓存省下的次数。</div>
   </div>
 </div>`;
 
@@ -110,6 +112,7 @@ const panelTpl = `
       <label class="sd-field"><span>语料</span>
         <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
       </label>
+      <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>省流：六遍读合并成一次调用（少花一半调用，分析略粗）</span></label>
       <div class="sd-actions">
         <button id="sd_read1" class="menu_button">开始六遍读</button>
         <span id="sd_status1" class="sd-status"></span>
@@ -195,7 +198,8 @@ function settings() {
   for (const key of Object.keys(defaultSettings)) {
     if (!Object.hasOwn(s, key)) s[key] = structuredClone(defaultSettings[key]);
   }
-  if (!s.stats) s.stats = { calls: 0, tokens: 0 };
+  if (!s.stats) s.stats = { calls: 0, tokens: 0, saved: 0 };
+  if (s.stats.saved == null) s.stats.saved = 0;
   if (!s.cache) s.cache = {};
   return s;
 }
@@ -263,9 +267,11 @@ function bumpStats(tokens) {
 
 function renderStats() {
   const s = settings();
-  const txt = '已调用 ' + s.stats.calls + ' 次' + (s.stats.tokens ? ' · ' + s.stats.tokens + ' tok' : '');
+  let txt = '已调用 ' + s.stats.calls + ' 次';
+  if (s.stats.saved) txt += ' · 省 ' + s.stats.saved + ' 次';
+  if (s.stats.tokens) txt += ' · ' + s.stats.tokens + ' tok';
   if (el('sd_stats')) el('sd_stats').textContent = txt;
-  if (el('sd_stats_root')) el('sd_stats_root').textContent = String(s.stats.calls);
+  if (el('sd_stats_root')) el('sd_stats_root').textContent = s.stats.calls + ' 次' + (s.stats.saved ? '（省 ' + s.stats.saved + ' 次）' : '');
 }
 
 async function generateRawViaST(messages) {
@@ -312,6 +318,16 @@ async function generateViaCustom(messages, signal) {
 
 let activeController = null;
 let cancelled = false;
+let busy = false;
+
+function lockOr(statusId) {
+  if (busy) {
+    setStatus(statusId, '还有一步在跑，等它结束。', 'error');
+    return false;
+  }
+  busy = true;
+  return true;
+}
 
 async function callModel(messages) {
   if (cancelled) throw new Error('已停止');
@@ -337,14 +353,44 @@ function stopRun() {
   setStatus('sd_status1', '已请求停止。');
 }
 
-async function cachedRun(stage, inputKey, producer, force) {
+const CACHE_LIMIT = 5;
+
+function cacheList(stage) {
   const s = settings();
-  const hit = s.cache[stage];
-  if (!force && hit && hit.key === inputKey) {
-    return { data: hit.data, cached: true };
+  const cur = s.cache[stage];
+  if (!Array.isArray(cur)) {
+    s.cache[stage] = cur && cur.key ? [cur] : [];
+  }
+  return s.cache[stage];
+}
+
+function pushCache(stage, key, data) {
+  const list = cacheList(stage);
+  const i = list.findIndex((e) => e && e.key === key);
+  if (i >= 0) list.splice(i, 1);
+  list.unshift({ key, data });
+  if (list.length > CACHE_LIMIT) list.length = CACHE_LIMIT;
+}
+
+async function cachedRun(stage, inputKey, producer, force) {
+  const list = cacheList(stage);
+  if (!force) {
+    const i = list.findIndex((e) => e && e.key === inputKey);
+    if (i >= 0) {
+      const hit = list[i];
+      if (i > 0) {
+        list.splice(i, 1);
+        list.unshift(hit);
+      }
+      const s = settings();
+      s.stats.saved += 1;
+      renderStats();
+      save();
+      return { data: hit.data, cached: true };
+    }
   }
   const data = await producer();
-  s.cache[stage] = { key: inputKey, data };
+  pushCache(stage, inputKey, data);
   save();
   return { data, cached: false };
 }
@@ -494,34 +540,66 @@ async function runRead1(force) {
     setStatus('sd_status1', '先贴语料。', 'error');
     return;
   }
+  if (!lockOr('sd_status1')) return;
   cancelled = false;
-  setStatus('sd_status1', '读前三遍…');
+  setStatus('sd_status1', s.thrifty ? '七遍一起读…' : '读前三遍…');
   el('sd_read1').disabled = true;
   try {
-    const withDraft = s.source === 'reference';
-    const key = hashKey({ corpus: s.corpus, genre: s.genre, withDraft });
+    const thrifty = !!s.thrifty;
+    const key = hashKey(thrifty ? { all: true, corpus: s.corpus, genre: s.genre } : { corpus: s.corpus, genre: s.genre });
     const { data, cached } = await cachedRun(
-      'read1',
+      thrifty ? 'readall' : 'read1',
       key,
-      async () => parseJSON(await callModel(Prompts.read1({ corpus: s.corpus, genre: s.genre, withDraft }))),
+      async () =>
+        parseJSON(
+          await callModel(
+            thrifty
+              ? Prompts.readAll({ corpus: s.corpus, genre: s.genre })
+              : Prompts.read1({ corpus: s.corpus, genre: s.genre })
+          )
+        ),
       force
     );
-    s.read1 = data;
-    s.draft = withDraft && data.draft ? data.draft : null;
+    s.read1 = {
+      syntax: data.syntax,
+      object: data.object,
+      attitude: data.attitude,
+      rhetoric: data.rhetoric,
+      samples: data.samples,
+      beliefs: data.beliefs,
+      draft: data.draft
+    };
+    s.draft = data.draft || null;
     s.beliefs = (data.beliefs || []).map((b) => ({
       belief: b.belief || '',
       evidence: b.evidence || '',
       counter: b.counter || '',
       on: true
     }));
-    renderReadout(el('sd_readout'), Object.assign({}, data, { draft: s.draft }));
+    const shownDraft = s.source === 'reference' ? s.draft : null;
+    renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: shownDraft }));
     renderBeliefs();
-    setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '前三遍读完了，去确认信念。', 'ok');
+    if (thrifty) {
+      s.read2 = {
+        position: data.position || '',
+        neighbor_diff: data.neighbor_diff || '',
+        blacklist: data.blacklist || [],
+        belief_core: data.belief_core || ''
+      };
+      s.blacklist = (data.blacklist || []).map((t) => ({ text: t, on: true }));
+      pushCache('read2', hashKey({ corpus: s.corpus, genre: s.genre, beliefs: selectedBeliefs() }), s.read2);
+      renderReadout(el('sd_position'), s.read2);
+      renderBlacklist();
+      setStatus('sd_status1', cached ? '省流结果命中缓存，未再调用 API。' : '七遍一次读完，信念确认一下就能成块。', 'ok');
+    } else {
+      setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '前三遍读完了，去确认信念。', 'ok');
+    }
     save();
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
   } finally {
     el('sd_read1').disabled = false;
+    busy = false;
   }
 }
 
@@ -531,6 +609,7 @@ async function runRefineLayer(layer) {
     setStatus('sd_status1', '先读前三遍。', 'error');
     return;
   }
+  if (!lockOr('sd_status1')) return;
   cancelled = false;
   setStatus('sd_status1', '重蒸「' + (Prompts.LAYERS[layer] || layer) + '」…');
   try {
@@ -539,7 +618,7 @@ async function runRefineLayer(layer) {
     const parsed = parseJSON(out);
     if (parsed && parsed.value !== undefined) {
       s.read1[layer] = parsed.value;
-      renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
+      renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.source === 'reference' ? s.draft : null }));
       setStatus('sd_status1', '「' + (Prompts.LAYERS[layer] || layer) + '」重蒸好了。', 'ok');
       save();
     } else {
@@ -547,6 +626,8 @@ async function runRefineLayer(layer) {
     }
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
+  } finally {
+    busy = false;
   }
 }
 
@@ -557,6 +638,7 @@ async function runRead2(force) {
     setStatus('sd_status2', '至少留一条信念。', 'error');
     return;
   }
+  if (!lockOr('sd_status2')) return;
   cancelled = false;
   setStatus('sd_status2', '读后三遍…');
   el('sd_read2').disabled = true;
@@ -578,6 +660,7 @@ async function runRead2(force) {
     setStatus('sd_status2', String(e.message || e), 'error');
   } finally {
     el('sd_read2').disabled = false;
+    busy = false;
   }
 }
 
@@ -587,6 +670,7 @@ async function runCompose(force) {
     setStatus('sd_status3', '先把六遍读完。', 'error');
     return;
   }
+  if (!lockOr('sd_status3')) return;
   cancelled = false;
   setStatus('sd_status3', '压成块…');
   el('sd_compose').disabled = true;
@@ -619,6 +703,7 @@ async function runCompose(force) {
     setStatus('sd_status3', String(e.message || e), 'error');
   } finally {
     el('sd_compose').disabled = false;
+    busy = false;
   }
 }
 
@@ -634,6 +719,7 @@ async function runRewrite(force) {
     setStatus('sd_status4', '先贴一段默认 AI 腔。', 'error');
     return;
   }
+  if (!lockOr('sd_status4')) return;
   cancelled = false;
   setStatus('sd_status4', '改写中…');
   el('sd_dorewrite').disabled = true;
@@ -654,6 +740,7 @@ async function runRewrite(force) {
     setStatus('sd_status4', String(e.message || e), 'error');
   } finally {
     el('sd_dorewrite').disabled = false;
+    busy = false;
   }
 }
 
@@ -688,7 +775,9 @@ function buildJSON() {
     read2: s.read2 || null,
     draft: s.draft || null,
     test: { passage: s.passage, rewrite: s.rewrite, verdict: s.verdict },
-    play: { mode: s.playMode }
+    play: { mode: s.playMode },
+    thrifty: !!s.thrifty,
+    stats: s.stats
   };
 }
 
@@ -756,13 +845,14 @@ function restoreLayer() {
   updateMode();
   el('sd_source').value = s.source;
   el('sd_genre').value = s.genre;
+  el('sd_thrifty').checked = !!s.thrifty;
   el('sd_name').value = s.name;
   el('sd_corpus').value = s.corpus;
   el('sd_passage').value = s.passage || DEFAULT_PASSAGE;
   el('sd_rewrite').value = s.rewrite || '';
   el('sd_block').value = s.block || '';
   el('sd_play').value = s.playMode || 'none';
-  if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
+  if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.source === 'reference' ? s.draft : null }));
   if (s.beliefs && s.beliefs.length) renderBeliefs();
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
@@ -868,6 +958,7 @@ function bindLayer() {
 
   el('sd_source').addEventListener('change', (e) => { settings().source = e.target.value; save(); });
   el('sd_genre').addEventListener('change', (e) => { settings().genre = e.target.value; save(); });
+  el('sd_thrifty').addEventListener('change', (e) => { settings().thrifty = e.target.checked; save(); });
   el('sd_name').addEventListener('input', (e) => { settings().name = e.target.value; save(); });
   el('sd_corpus').addEventListener('input', (e) => { settings().corpus = e.target.value; save(); });
   el('sd_passage').addEventListener('input', (e) => { settings().passage = e.target.value; save(); });

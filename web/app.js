@@ -19,13 +19,24 @@ const state = {
   block: "",
   test: { passage: DEFAULT_PASSAGE, rewrite: "", verdict: "" },
   play: { mode: "none" },
+  thrifty: true,
   cache: {},
-  stats: { calls: 0, tokens: 0 },
+  stats: { calls: 0, tokens: 0, saved: 0 },
   ui: { fabPos: null, panelPos: null, panelOpen: false }
 };
 
 let activeController = null;
 let cancelled = false;
+let busy = false;
+
+function lockOr(statusId) {
+  if (busy) {
+    setStatus(statusId, "还有一步在跑，等它结束。", "error");
+    return false;
+  }
+  busy = true;
+  return true;
+}
 
 function saveState() {
   try {
@@ -54,7 +65,8 @@ function loadState() {
       Object.assign(state, parsed);
       state.config = Object.assign({ baseUrl: "", apiKey: "", model: "", temperature: 0.7 }, parsed.config || {});
       state.ui = Object.assign({ fabPos: null, panelPos: null, panelOpen: false }, parsed.ui || {});
-      state.stats = Object.assign({ calls: 0, tokens: 0 }, parsed.stats || {});
+      state.stats = Object.assign({ calls: 0, tokens: 0, saved: 0 }, parsed.stats || {});
+      if (state.stats.saved == null) state.stats.saved = 0;
       state.cache = parsed.cache || {};
     }
   } catch (e) {}
@@ -102,7 +114,9 @@ function hashKey(value) {
 }
 
 function renderStats() {
-  const txt = "已调用 " + state.stats.calls + " 次" + (state.stats.tokens ? " · " + state.stats.tokens + " tok" : "");
+  let txt = "已调用 " + state.stats.calls + " 次";
+  if (state.stats.saved) txt += " · 省 " + state.stats.saved + " 次";
+  if (state.stats.tokens) txt += " · " + state.stats.tokens + " tok";
   if ($("wfd-stats")) $("wfd-stats").textContent = txt;
 }
 
@@ -157,12 +171,42 @@ function stopRun() {
   setStatus("status-read", "已请求停止。");
 }
 
+const CACHE_LIMIT = 5;
+
+function cacheList(stage) {
+  const cur = state.cache[stage];
+  if (!Array.isArray(cur)) {
+    state.cache[stage] = cur && cur.key ? [cur] : [];
+  }
+  return state.cache[stage];
+}
+
+function pushCache(stage, key, data) {
+  const list = cacheList(stage);
+  const i = list.findIndex((e) => e && e.key === key);
+  if (i >= 0) list.splice(i, 1);
+  list.unshift({ key, data });
+  if (list.length > CACHE_LIMIT) list.length = CACHE_LIMIT;
+}
+
 async function cachedRun(stage, key, producer, force) {
-  if (!force && state.cache[stage] && state.cache[stage].key === key) {
-    return { data: state.cache[stage].data, cached: true };
+  const list = cacheList(stage);
+  if (!force) {
+    const i = list.findIndex((e) => e && e.key === key);
+    if (i >= 0) {
+      const hit = list[i];
+      if (i > 0) {
+        list.splice(i, 1);
+        list.unshift(hit);
+      }
+      state.stats.saved += 1;
+      renderStats();
+      saveState();
+      return { data: hit.data, cached: true };
+    }
   }
   const data = await producer();
-  state.cache[stage] = { key, data };
+  pushCache(stage, key, data);
   saveState();
   return { data, cached: false };
 }
@@ -295,25 +339,53 @@ async function runRead1(force) {
     return;
   }
   state.feed = feed;
+  if (!lockOr("status-read")) return;
   state.draft = null;
   cancelled = false;
-  setStatus("status-read", "读前三遍…");
+  const thrifty = !!state.thrifty;
+  setStatus("status-read", thrifty ? "七遍一起读…" : "读前三遍…");
   $("btn-read").disabled = true;
   try {
-    const withDraft = feed.source === "reference";
-    const key = hashKey({ corpus: feed.corpus, genre: feed.genre, withDraft });
-    const out = await cachedRun("read1", key, () => runModel(Prompts.read1(Object.assign({}, feed, { withDraft }))), force);
-    const data = extractJSON(out.data);
-    state.read1 = data;
-    state.draft = withDraft && data.draft ? data.draft : null;
-    renderRead1(data);
-    setStatus("status-read", out.cached ? "输入没变，用上次结果，未再调用 API。" : "前三遍读完了。去“卡点·信念”确认。", "ok");
-    setStep(1, 2);
+    if (thrifty) {
+      const key = hashKey({ all: true, corpus: feed.corpus, genre: feed.genre });
+      const out = await cachedRun("readall", key, () => runModel(Prompts.readAll({ corpus: feed.corpus, genre: feed.genre })), force);
+      const data = extractJSON(out.data);
+      state.read1 = {
+        syntax: data.syntax,
+        object: data.object,
+        attitude: data.attitude,
+        rhetoric: data.rhetoric,
+        samples: data.samples,
+        beliefs: data.beliefs,
+        draft: data.draft
+      };
+      state.draft = feed.source === "reference" ? data.draft || null : null;
+      renderRead1(state.read1);
+      state.read2 = {
+        position: data.position || "",
+        neighbor_diff: data.neighbor_diff || "",
+        blacklist: data.blacklist || [],
+        belief_core: data.belief_core || ""
+      };
+      pushCache("read2", hashKey({ corpus: feed.corpus, genre: feed.genre, beliefs: collectBeliefs() }), JSON.stringify(state.read2));
+      setStatus("status-read", out.cached ? "省流结果命中缓存，未再调用 API。" : "七遍一次读完。去“卡点·信念”确认。", "ok");
+      setStep(1, 2);
+    } else {
+      const key = hashKey({ corpus: feed.corpus, genre: feed.genre });
+      const out = await cachedRun("read1", key, () => runModel(Prompts.read1({ corpus: feed.corpus, genre: feed.genre })), force);
+      const data = extractJSON(out.data);
+      state.read1 = data;
+      state.draft = feed.source === "reference" ? data.draft || null : null;
+      renderRead1(state.read1);
+      setStatus("status-read", out.cached ? "输入没变，用上次结果，未再调用 API。" : "前三遍读完了。去“卡点·信念”确认。", "ok");
+      setStep(1, 2);
+    }
     saveState();
   } catch (e) {
     setStatus("status-read", String(e.message || e), "error");
   } finally {
     $("btn-read").disabled = false;
+    busy = false;
   }
 }
 
@@ -323,6 +395,7 @@ async function runRefineLayer(layer) {
     return;
   }
   const feed = state.feed || feedInputs();
+  if (!lockOr("status-read")) return;
   cancelled = false;
   setStatus("status-read", "重蒸「" + (Prompts.LAYERS[layer] || layer) + "」…");
   try {
@@ -340,6 +413,8 @@ async function runRefineLayer(layer) {
     }
   } catch (e) {
     setStatus("status-read", String(e.message || e), "error");
+  } finally {
+    busy = false;
   }
 }
 
@@ -350,6 +425,7 @@ async function runRead2(force) {
     return;
   }
   const feed = feedInputs();
+  if (!lockOr("status-belief")) return;
   cancelled = false;
   setStatus("status-belief", "读后三遍…");
   $("btn-read2").disabled = true;
@@ -366,6 +442,7 @@ async function runRead2(force) {
     setStatus("status-belief", String(e.message || e), "error");
   } finally {
     $("btn-read2").disabled = false;
+    busy = false;
   }
 }
 
@@ -376,6 +453,7 @@ async function runCompose(force) {
   }
   const feed = state.feed || feedInputs();
   const samples = state.read1.samples || [];
+  if (!lockOr("status-black")) return;
   cancelled = false;
   setStatus("status-black", "压成块…");
   $("btn-compose").disabled = true;
@@ -408,6 +486,7 @@ async function runCompose(force) {
     setStatus("status-black", String(e.message || e), "error");
   } finally {
     $("btn-compose").disabled = false;
+    busy = false;
   }
 }
 
@@ -422,6 +501,7 @@ async function runRewrite(force) {
     setStatus("status-test", "先贴一段默认 AI 腔。", "error");
     return;
   }
+  if (!lockOr("status-test")) return;
   cancelled = false;
   setStatus("status-test", "改写中…");
   $("btn-rewrite").disabled = true;
@@ -438,6 +518,7 @@ async function runRewrite(force) {
     setStatus("status-test", String(e.message || e), "error");
   } finally {
     $("btn-rewrite").disabled = false;
+    busy = false;
   }
 }
 
@@ -464,7 +545,9 @@ function buildJSON() {
     read2: state.read2 || null,
     draft: state.draft || null,
     test: state.test,
-    play: state.play
+    play: state.play,
+    thrifty: !!state.thrifty,
+    stats: state.stats
   };
 }
 
@@ -585,6 +668,7 @@ function restore() {
 
   $("source").value = state.feed.source || "mine";
   $("genre").value = state.feed.genre || "narration";
+  $("thrifty").checked = state.thrifty !== false;
   $("name").value = state.feed.name || "";
   $("corpus").value = state.feed.corpus || "";
   $("passage").value = (state.test && state.test.passage) || DEFAULT_PASSAGE;
@@ -592,6 +676,7 @@ function restore() {
   $("block").value = state.block || "";
   $("play-mode").value = (state.play && state.play.mode) || "none";
 
+  if (state.feed.source !== "reference") state.draft = null;
   if (state.read1) renderRead1(state.read1, false);
   if (state.beliefs && state.beliefs.length) renderBeliefs();
   if (state.read2) renderRead2(state.read2);
@@ -658,6 +743,11 @@ function bind() {
       state.feed = feedInputs();
       saveState();
     });
+  });
+
+  $("thrifty").addEventListener("change", (e) => {
+    state.thrifty = e.target.checked;
+    saveState();
   });
 
   $("copy-block").addEventListener("click", async () => {

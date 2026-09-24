@@ -17,19 +17,7 @@ export const LAYERS = {
 const SYS_ANALYST = "你是大厨烹饪处。你只做分析、不下最终结论，并且只输出 JSON。";
 const SYS_JSON = "你是大厨烹饪处。你只输出 JSON。";
 
-export function read1({ corpus, genre, withDraft }) {
-  const draftRule = withDraft
-    ? `
-另外，因为来料是“参考文字”，再顺带给一篇“能贴的草稿”和一份“拿不准清单”。
-草稿要像本人写的，但不要照抄句子和人名。
-拿不准清单列 3-6 条你不敢确定的地方，让用户来定。`
-    : "";
-
-  const draftShape = withDraft
-    ? `,
- "draft":{"draft":"","uncertain":["",""]}`
-    : "";
-
+export function read1({ corpus, genre }) {
   return [
     { role: "system", content: SYS_ANALYST },
     {
@@ -47,7 +35,8 @@ ${corpus}
 
 然后：
 - 给 2-3 个“信念候选”——她写作时心里那个不允许自己偏离的东西。每条配 belief（一句话）、evidence（引原句）、counter（她绝不会写的反例）。
-- 从语料里剪 2-3 段最能代表她句法的原句，放进 samples，供后面拼文风块时当样本，可把专名换成占位符，句法不要动。${draftRule}
+- 从语料里剪 2-3 段最能代表她句法的原句，放进 samples，供后面拼文风块时当样本，可把专名换成占位符，句法不要动。
+- 顺带再给一篇“能贴的草稿”和一份“拿不准清单”。草稿要像本人写的，但不要照抄句子和人名。拿不准清单列 3-6 条你不敢确定的地方。
 
 只输出 JSON：
 {"syntax":{"vocab":"","sentence":"","rhythm":"","punctuation":"","register":""},
@@ -55,7 +44,49 @@ ${corpus}
  "attitude":{"tragedy":"","comedy":"","intimacy":"","failure":"","time":""},
  "rhetoric":["",""],
  "samples":["",""],
- "beliefs":[{"belief":"","evidence":"","counter":""}]${draftShape}}`
+ "beliefs":[{"belief":"","evidence":"","counter":""}],
+ "draft":{"draft":"","uncertain":["",""]}}`
+    }
+  ];
+}
+
+export function readAll({ corpus, genre }) {
+  return [
+    { role: "system", content: SYS_ANALYST },
+    {
+      role: "user",
+      content: `【体裁】${genreLabel(genre)}
+
+【语料】
+${corpus}
+
+把下面七遍读一次性读完，只输出 JSON。
+
+前三遍：
+1. 句法层：词汇偏好、句长分布、节奏、标点习惯、语体混合比。
+2. 对象层：写谁、不写谁、隐含听众是谁。
+3. 态度层：对悲剧/喜剧/历史/亲密/失败/时代的态度。只从她做什么动作判断，不从她自述判断。
+4. 修辞习惯：爱用比喻还是列数字，反复出现的 moves。
+
+后三遍：
+5. 历史定位：她传承自谁，接续哪条传统，和哪个表面相似的作者在哪里划清界限（通常分在信念层，不在句法层）。
+6. 黑名单：她绝不会用的手法、绝不会写的情绪。至少 6 条。
+7. 核心信念压缩：一句话。
+
+另外：
+- 给 2-3 个“信念候选”——belief（一句话）、evidence（引原句）、counter（她绝不会写的反例）。
+- 剪 2-3 段最能代表她句法的原句放进 samples，可把专名换成占位符，句法不要动。
+- 给一篇“能贴的草稿”和一份“拿不准清单”（3-6 条）。
+
+只输出 JSON：
+{"syntax":{"vocab":"","sentence":"","rhythm":"","punctuation":"","register":""},
+ "object":{"writes":"","notWrites":"","listener":""},
+ "attitude":{"tragedy":"","comedy":"","intimacy":"","failure":"","time":""},
+ "rhetoric":["",""],
+ "samples":["",""],
+ "beliefs":[{"belief":"","evidence":"","counter":""}],
+ "draft":{"draft":"","uncertain":["",""]},
+ "position":"","neighbor_diff":"","blacklist":["","","","","",""],"belief_core":""}`
     }
   ];
 }
