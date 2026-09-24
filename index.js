@@ -1261,11 +1261,21 @@ function applyPanel() {
   const b = el('sd_backdrop');
   if (!p) return;
   if (!s.panelOpen) {
+    p.classList.remove('sd-open');
     p.style.display = 'none';
     if (b) b.style.display = 'none';
     return;
   }
+  p.classList.add('sd-open');
   p.style.display = 'flex';
+  p.style.visibility = 'visible';
+  p.style.opacity = '1';
+  p.style.left = '50%';
+  p.style.right = 'auto';
+  p.style.top = '56px';
+  p.style.bottom = '112px';
+  p.style.transform = 'translateX(-50%)';
+  p.style.zIndex = '2147483647';
   if (b) b.style.display = 'block';
 }
 
