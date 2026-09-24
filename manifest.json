@@ -1,0 +1,18 @@
+{
+  "display_name": "文风蒸馏器",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "dependencies": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "caij97116-stack",
+  "version": "0.1.0",
+  "homePage": "https://github.com/caij97116-stack/Chef-s-cooking",
+  "auto_update": false,
+  "hooks": {
+    "activate": "onActivate",
+    "enable": "onEnable",
+    "disable": "onDisable"
+  }
+}

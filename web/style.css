@@ -1,0 +1,286 @@
+:root {
+  --bg: #14161a;
+  --panel: #1b1e24;
+  --panel-2: #22262e;
+  --line: #2e333c;
+  --text: #e6e8ec;
+  --muted: #9aa2af;
+  --accent: #c8a45c;
+  --accent-2: #7f8ea3;
+  --danger: #c76a5a;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #191c22, #14161a);
+}
+
+.brand h1 {
+  margin: 0 0 2px;
+  font-size: 20px;
+  letter-spacing: 0.5px;
+}
+
+.brand p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+main {
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0;
+}
+
+.stepper li {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: var(--panel);
+}
+
+.stepper li.active {
+  color: #17181c;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.stepper li.done {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 18px;
+}
+
+.panel.locked {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 680px) {
+  .grid2 { grid-template-columns: 1fr; }
+}
+
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  outline: none;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.6;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent-2);
+}
+
+.inline {
+  display: flex;
+  gap: 8px;
+}
+
+.inline input { flex: 1; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #17181c;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+button.primary:hover { filter: brightness(1.08); }
+
+button.ghost {
+  background: transparent;
+  color: var(--text);
+}
+
+button.ghost:hover { background: var(--panel-2); }
+
+.status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status.error { color: var(--danger); }
+.status.ok { color: var(--accent); }
+
+.readout {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.readout:empty::before {
+  content: "还没有结果。";
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.readout .row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+}
+
+.readout .row b {
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.cards {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel-2);
+}
+
+.card input[type="checkbox"] {
+  margin-top: 4px;
+  accent-color: var(--accent);
+}
+
+.card .body { flex: 1; }
+
+.card .body input {
+  margin-top: 6px;
+}
+
+.card .meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card .meta .ev { color: var(--accent-2); }
+
+.card.off {
+  opacity: 0.5;
+}
+
+dialog#config {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 24px;
+  width: min(480px, 92vw);
+}
+
+dialog#config::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+dialog h2 { margin-top: 0; }
