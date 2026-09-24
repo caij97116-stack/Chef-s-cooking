@@ -7,159 +7,176 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <h1>大厨烹饪处</h1>
-    <p>语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</p>
+<section class="hero">
+  <h1>大厨烹饪处</h1>
+  <p>语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</p>
+  <p class="hero-tip">点右下角的悬浮球开始。悬浮球和面板都能拖动，位置和进度会自动记住。</p>
+  <div class="actions center">
+    <button class="primary open-config" type="button">API 设置</button>
   </div>
-  <button id="open-config" class="ghost" type="button">API 设置</button>
-</header>
+</section>
 
-<main>
-  <ol class="stepper" id="stepper">
-    <li data-step="feed">1 喂料</li>
-    <li data-step="read">2 六遍读</li>
-    <li data-step="belief">3 卡点·信念</li>
-    <li data-step="black">4 卡点·反例</li>
-    <li data-step="compose">5 成块</li>
-    <li data-step="test">6 测试门</li>
-    <li data-step="export">7 拿走</li>
-  </ol>
+<div id="wfd-layer" class="wfd-layer">
+  <div class="wfd-fab" id="wfd-fab" title="大厨烹饪处"><i>厨</i></div>
 
-  <section class="panel" id="step-feed">
-    <div class="panel-head">
-      <h2>喂料</h2>
-      <span class="hint">同一体裁的语料，越多越稳。默认不出域。</span>
+  <div class="wfd-panel" id="wfd-panel">
+    <div class="wfd-panel-head" id="wfd-panel-head">
+      <span>大厨烹饪处 <span class="stat" id="wfd-stats">已调用 0 次</span></span>
+      <span class="head-right">
+        <button class="icon-btn open-config" type="button" title="API 设置">齿轮</button>
+        <button class="icon-btn" id="wfd-stop" type="button" title="停止本次生成">停</button>
+        <button class="icon-btn" id="wfd-close" type="button" title="收起">×</button>
+      </span>
     </div>
-    <div class="grid2">
-      <label class="field">
-        <span>来源</span>
-        <select id="source">
-          <option value="mine">我的文字（只出条目，等你点）</option>
-          <option value="reference">参考文字（另出可贴草稿 + 拿不准清单）</option>
-        </select>
-      </label>
-      <label class="field">
-        <span>体裁</span>
-        <select id="genre">
-          <option value="narration">叙事</option>
-          <option value="dialogue">对白</option>
-          <option value="interior">内心</option>
-          <option value="action">动作</option>
-        </select>
-      </label>
-    </div>
-    <label class="field">
-      <span>名字（给她起个名）</span>
-      <input id="name" type="text" placeholder="例如：冷硬短句 · 身体叙事">
-    </label>
-    <label class="field">
-      <span>语料</span>
-      <textarea id="corpus" rows="12" placeholder="把同一体裁的原文贴进来，段落之间空一行。"></textarea>
-    </label>
-    <div class="actions">
-      <button id="btn-read" class="primary" type="button">开始六遍读</button>
-      <span class="status" id="status-read"></span>
-    </div>
-  </section>
 
-  <section class="panel locked" id="step-read">
-    <div class="panel-head">
-      <h2>六遍读</h2>
-      <span class="hint">句法 / 对象 / 态度 / 历史定位 / 黑名单 / 信念压缩。第一次读出的声音通常是错的。</span>
-    </div>
-    <div id="read-output" class="readout"></div>
-  </section>
+    <div class="wfd-panel-body">
+      <ol class="stepper" id="stepper">
+        <li data-step="feed">1 喂料</li>
+        <li data-step="read">2 六遍读</li>
+        <li data-step="belief">3 卡点·信念</li>
+        <li data-step="black">4 卡点·反例</li>
+        <li data-step="compose">5 成块</li>
+        <li data-step="test">6 测试门</li>
+        <li data-step="export">7 拿走</li>
+      </ol>
 
-  <section class="panel locked" id="step-belief">
-    <div class="panel-head">
-      <h2>卡点·信念</h2>
-      <span class="hint">选 / 驳 / 修。没有你确认，不进下一步。</span>
-    </div>
-    <div id="belief-list" class="cards"></div>
-    <div class="actions">
-      <button id="btn-read2" class="primary" type="button">确认信念，读后三遍</button>
-      <span class="status" id="status-belief"></span>
-    </div>
-  </section>
+      <section class="panel" id="step-feed">
+        <div class="panel-head">
+          <h2>喂料</h2>
+          <span class="hint">同一体裁的语料，越多越稳。默认不出域。</span>
+        </div>
+        <div class="grid2">
+          <label class="field">
+            <span>来源</span>
+            <select id="source">
+              <option value="mine">我的文字（只出条目，等你点）</option>
+              <option value="reference">参考文字（另出可贴草稿 + 拿不准清单）</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>体裁</span>
+            <select id="genre">
+              <option value="narration">叙事</option>
+              <option value="dialogue">对白</option>
+              <option value="interior">内心</option>
+              <option value="action">动作</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>名字（给她起个名）</span>
+          <input id="name" type="text" placeholder="例如：冷硬短句 · 身体叙事">
+        </label>
+        <label class="field">
+          <span>语料</span>
+          <textarea id="corpus" rows="8" placeholder="把同一体裁的原文贴进来，段落之间空一行。"></textarea>
+        </label>
+        <div class="actions">
+          <button id="btn-read" class="primary" type="button">开始六遍读</button>
+          <button id="btn-read-force" class="ghost" type="button">强制重跑</button>
+          <span class="status" id="status-read"></span>
+        </div>
+      </section>
 
-  <section class="panel locked" id="step-black">
-    <div class="panel-head">
-      <h2>卡点·反例</h2>
-      <span class="hint">黑名单是最重要的部分，至少 6 条。最锋利的一条由你补。</span>
-    </div>
-    <div id="position-output" class="readout"></div>
-    <div id="blacklist-list" class="cards"></div>
-    <div class="field">
-      <span>你补的那条（她打死也不会写的）</span>
-      <div class="inline">
-        <input id="black-add" type="text" placeholder="例如：结尾用“愿你…”升华">
-        <button id="btn-black-add" class="ghost" type="button">加</button>
-      </div>
-    </div>
-    <div class="actions">
-      <button id="btn-compose" class="primary" type="button">压成文风块</button>
-      <span class="status" id="status-black"></span>
-    </div>
-  </section>
+      <section class="panel locked" id="step-read">
+        <div class="panel-head">
+          <h2>六遍读</h2>
+          <span class="hint">点某一层的「重蒸」只重读那一层。</span>
+        </div>
+        <div id="read-output" class="readout"></div>
+      </section>
 
-  <section class="panel locked" id="step-compose">
-    <div class="panel-head">
-      <h2>成块</h2>
-      <span class="hint">只留能贴的那段。不出现“技法 / 养成 / 层次 / DNA”这类词。</span>
-    </div>
-    <textarea id="block" rows="18" placeholder="文风块会出现在这里，可手改。"></textarea>
-    <div class="actions">
-      <button id="btn-test" class="primary" type="button">过测试门</button>
-      <span class="status" id="status-compose"></span>
-    </div>
-  </section>
+      <section class="panel locked" id="step-belief">
+        <div class="panel-head">
+          <h2>卡点·信念</h2>
+          <span class="hint">选 / 驳 / 修。没有你确认，不进下一步。</span>
+        </div>
+        <div id="belief-list" class="cards"></div>
+        <div class="actions">
+          <button id="btn-read2" class="primary" type="button">确认信念，读后三遍</button>
+          <span class="status" id="status-belief"></span>
+        </div>
+      </section>
 
-  <section class="panel locked" id="step-test">
-    <div class="panel-head">
-      <h2>测试门</h2>
-      <span class="hint">喂一段默认 AI 腔，用文风改写。你判像不像，不像只重蒸漂的那层。</span>
-    </div>
-    <div class="grid2">
-      <label class="field">
-        <span>默认 AI 腔样本</span>
-        <textarea id="passage" rows="6"></textarea>
-      </label>
-      <label class="field">
-        <span>改写结果</span>
-        <textarea id="rewrite" rows="6" placeholder="点下面的按钮生成。"></textarea>
-      </label>
-    </div>
-    <div class="actions">
-      <button id="btn-rewrite" class="primary" type="button">用文风改写</button>
-      <button id="verdict-like" class="ghost" type="button">像</button>
-      <button id="verdict-unlike" class="ghost" type="button">不像</button>
-      <span class="status" id="status-test"></span>
-    </div>
-  </section>
+      <section class="panel locked" id="step-black">
+        <div class="panel-head">
+          <h2>卡点·反例</h2>
+          <span class="hint">黑名单是最重要的部分，至少 6 条。最锋利的一条由你补。</span>
+        </div>
+        <div id="position-output" class="readout"></div>
+        <div id="blacklist-list" class="cards"></div>
+        <div class="field">
+          <span>你补的那条（她打死也不会写的）</span>
+          <div class="inline">
+            <input id="black-add" type="text" placeholder="例如：结尾用“愿你…”升华">
+            <button id="btn-black-add" class="ghost" type="button">加</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btn-compose" class="primary" type="button">压成文风块</button>
+          <span class="status" id="status-black"></span>
+        </div>
+      </section>
 
-  <section class="panel locked" id="step-export">
-    <div class="panel-head">
-      <h2>拿走</h2>
-      <span class="hint">文风块填哪里是你的自由，工具不管容器。</span>
+      <section class="panel locked" id="step-compose">
+        <div class="panel-head">
+          <h2>成块</h2>
+          <span class="hint">只留能贴的那段。不出现“技法 / 养成 / 层次 / DNA”这类词。</span>
+        </div>
+        <textarea id="block" rows="12" placeholder="文风块会出现在这里，可手改。"></textarea>
+        <div class="actions">
+          <button id="btn-test" class="primary" type="button">过测试门</button>
+          <span class="status" id="status-compose"></span>
+        </div>
+      </section>
+
+      <section class="panel locked" id="step-test">
+        <div class="panel-head">
+          <h2>测试门</h2>
+          <span class="hint">喂一段默认 AI 腔，用文风改写。你判像不像，不像只重蒸漂的那层。</span>
+        </div>
+        <div class="grid2">
+          <label class="field">
+            <span>默认 AI 腔样本</span>
+            <textarea id="passage" rows="6"></textarea>
+          </label>
+          <label class="field">
+            <span>改写结果</span>
+            <textarea id="rewrite" rows="6" placeholder="点下面的按钮生成。"></textarea>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-rewrite" class="primary" type="button">用文风改写</button>
+          <button id="verdict-like" class="ghost" type="button">像</button>
+          <button id="verdict-unlike" class="ghost" type="button">不像</button>
+          <span class="status" id="status-test"></span>
+        </div>
+      </section>
+
+      <section class="panel locked" id="step-export">
+        <div class="panel-head">
+          <h2>拿走</h2>
+          <span class="hint">文风块填哪里是你的自由，工具不管容器。</span>
+        </div>
+        <label class="field">
+          <span>玩法备注（可选，默认空，不并入文风）</span>
+          <select id="play-mode">
+            <option value="none">不写</option>
+            <option value="shell">只演他人（不替 {{user}} 发言）</option>
+            <option value="polish">润色代述（按文风润色 {{user}} 的输入）</option>
+            <option value="actor">全权代演（AI 完整扮演 {{user}}）</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button id="copy-block" class="primary" type="button">复制文风块</button>
+          <button id="download-json" class="ghost" type="button">下载 JSON</button>
+          <button id="download-pool" class="ghost" type="button">下载蒸馏池</button>
+          <span class="status" id="status-export"></span>
+        </div>
+      </section>
     </div>
-    <label class="field">
-      <span>玩法备注（可选，默认空，不并入文风）</span>
-      <select id="play-mode">
-        <option value="none">不写</option>
-        <option value="shell">只演他人（不替 {{user}} 发言）</option>
-        <option value="polish">润色代述（按文风润色 {{user}} 的输入）</option>
-        <option value="actor">全权代演（AI 完整扮演 {{user}}）</option>
-      </select>
-    </label>
-    <div class="actions">
-      <button id="copy-block" class="primary" type="button">复制文风块</button>
-      <button id="download-json" class="ghost" type="button">下载 JSON</button>
-      <button id="download-pool" class="ghost" type="button">下载蒸馏池</button>
-      <span class="status" id="status-export"></span>
-    </div>
-  </section>
-</main>
+  </div>
+</div>
 
 <dialog id="config">
   <form method="dialog" class="config-form">
@@ -176,6 +193,10 @@
     <label class="field">
       <span>模型</span>
       <input id="model" type="text" placeholder="deepseek-chat">
+    </label>
+    <label class="field">
+      <span>温度 <b id="tempval">0.7</b></span>
+      <input id="temperature" type="range" min="0" max="1.5" step="0.1" value="0.7">
     </label>
     <div class="actions">
       <button id="save-config" class="primary" value="save" type="button">保存</button>

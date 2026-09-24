@@ -135,6 +135,47 @@
   box-sizing: border-box;
 }
 
+.sd-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+
+.sd-layer > * {
+  pointer-events: auto;
+}
+
+.sd-head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sd-panel-stop {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.sd-panel-stop:hover {
+  opacity: 1;
+  color: #d66;
+}
+
+.sd-stat {
+  font-weight: 400;
+  font-size: 0.75em;
+  opacity: 0.6;
+  margin-left: 6px;
+}
+
+.sd-refresh {
+  margin-left: 6px;
+  font-size: 0.8em;
+  padding: 0 6px;
+  line-height: 1.6;
+}
+
 .sd-fab {
   position: fixed;
   right: 18px;

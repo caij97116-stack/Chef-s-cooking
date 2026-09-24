@@ -284,3 +284,126 @@ dialog#config::backdrop {
 }
 
 dialog h2 { margin-top: 0; }
+
+.hero {
+  max-width: 720px;
+  margin: 8vh auto 0;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  letter-spacing: 1px;
+}
+
+.hero p {
+  margin: 0 0 8px;
+  color: var(--muted);
+}
+
+.hero-tip { font-size: 13px; }
+
+.actions.center { justify-content: center; }
+
+.wfd-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+
+.wfd-layer > * { pointer-events: auto; }
+
+.wfd-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: grab;
+  color: #17181c;
+  background: var(--accent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  user-select: none;
+  touch-action: none;
+}
+
+.wfd-fab:active { cursor: grabbing; }
+
+.wfd-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 90px;
+  width: min(460px, 94vw);
+  max-height: min(80vh, 760px);
+  display: none;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.wfd-panel.open { display: flex; }
+
+.wfd-panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.wfd-panel-head:active { cursor: grabbing; }
+
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.icon-btn:hover { background: var(--panel-2); }
+
+.stat {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.wfd-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+button.refresh {
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}

@@ -9,6 +9,7 @@ const defaultSettings = Object.freeze({
   baseUrl: '',
   apiKey: '',
   model: '',
+  temperature: 0.7,
   source: 'mine',
   genre: 'narration',
   name: '',
@@ -26,7 +27,9 @@ const defaultSettings = Object.freeze({
   showFab: true,
   fabPos: null,
   panelPos: null,
-  panelOpen: false
+  panelOpen: false,
+  cache: {},
+  stats: { calls: 0, tokens: 0 }
 });
 
 const settingsTpl = `
@@ -38,7 +41,7 @@ const settingsTpl = `
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
     <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>在页面上显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
-    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开。</div>
+    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开面板。本会话已调用模型 <b id="sd_stats_root">0</b> 次。</div>
   </div>
 </div>`;
 
@@ -47,8 +50,11 @@ const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处"><i class
 const panelTpl = `
 <div class="sd-panel" id="sd_panel">
   <div class="sd-panel-head" id="sd_panel_head">
-    <span>大厨烹饪处</span>
-    <i class="fa-solid fa-xmark sd-panel-close" id="sd_panel_close"></i>
+    <span>大厨烹饪处 <span class="sd-stat" id="sd_stats">已调用 0 次</span></span>
+    <span class="sd-head-right">
+      <i class="fa-solid fa-stop sd-panel-stop" id="sd_stop" title="停止本次生成"></i>
+      <i class="fa-solid fa-xmark sd-panel-close" id="sd_panel_close" title="收起"></i>
+    </span>
   </div>
   <div class="sd-panel-body">
     <div class="sd-sec">
@@ -72,6 +78,9 @@ const panelTpl = `
             <datalist id="sd_modellist"></datalist>
             <button id="sd_pull" class="menu_button">拉取模型</button>
           </div>
+        </label>
+        <label class="sd-field"><span>温度 <b id="sd_tempval">0.7</b></span>
+          <input id="sd_temp" type="range" min="0" max="1.5" step="0.1">
         </label>
         <div class="sd-actions"><span id="sd_status0" class="sd-status"></span></div>
       </div>
@@ -108,7 +117,7 @@ const panelTpl = `
     </div>
 
     <div class="sd-sec">
-      <div class="sd-sec-title">前三遍读</div>
+      <div class="sd-sec-title">前三遍读<span class="sd-hint">点某一层的「重蒸」只重读那一层</span></div>
       <div id="sd_readout" class="sd-readout"></div>
     </div>
 
@@ -184,8 +193,10 @@ function settings() {
   }
   const s = extensionSettings[MODULE_NAME];
   for (const key of Object.keys(defaultSettings)) {
-    if (!Object.hasOwn(s, key)) s[key] = defaultSettings[key];
+    if (!Object.hasOwn(s, key)) s[key] = structuredClone(defaultSettings[key]);
   }
+  if (!s.stats) s.stats = { calls: 0, tokens: 0 };
+  if (!s.cache) s.cache = {};
   return s;
 }
 
@@ -213,12 +224,48 @@ function setStatus(id, text, kind) {
 }
 
 function parseJSON(text) {
-  let s = String(text || '').trim();
-  s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  let s = String(text == null ? '' : text).trim();
+  if (!s) throw new Error('模型没有返回内容，请重试或检查 API');
+  s = s.replace(/```[a-zA-Z]*\s*/g, '').replace(/```/g, '').trim();
   const a = s.indexOf('{');
   const b = s.lastIndexOf('}');
   if (a >= 0 && b > a) s = s.slice(a, b + 1);
-  return JSON.parse(s);
+  try {
+    return JSON.parse(s);
+  } catch (e) {
+    const trailing = s.replace(/,\s*([}\]])/g, '$1');
+    try {
+      return JSON.parse(trailing);
+    } catch (e2) {
+      const quoted = trailing.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:/g, '$1"$2":');
+      return JSON.parse(quoted);
+    }
+  }
+}
+
+function hashKey(value) {
+  const str = typeof value === 'string' ? value : JSON.stringify(value);
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function bumpStats(tokens) {
+  const s = settings();
+  s.stats.calls += 1;
+  if (tokens) s.stats.tokens += tokens;
+  renderStats();
+  save();
+}
+
+function renderStats() {
+  const s = settings();
+  const txt = '已调用 ' + s.stats.calls + ' 次' + (s.stats.tokens ? ' · ' + s.stats.tokens + ' tok' : '');
+  if (el('sd_stats')) el('sd_stats').textContent = txt;
+  if (el('sd_stats_root')) el('sd_stats_root').textContent = String(s.stats.calls);
 }
 
 async function generateRawViaST(messages) {
@@ -237,7 +284,7 @@ async function generateRawViaST(messages) {
   return String(result == null ? '' : result);
 }
 
-async function generateViaCustom(messages) {
+async function generateViaCustom(messages, signal) {
   const s = settings();
   if (!s.baseUrl || !s.apiKey || !s.model) {
     throw new Error('先填好自定义站子的 Base URL / Key / 模型');
@@ -246,19 +293,60 @@ async function generateViaCustom(messages) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.apiKey },
-    body: JSON.stringify({ model: s.model, messages, temperature: 0.7 })
+    body: JSON.stringify({ model: s.model, messages, temperature: Number(s.temperature) || 0.7 }),
+    signal
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error('HTTP ' + res.status + ' · ' + t.slice(0, 180));
   }
   const data = await res.json();
+  const tokens = data && data.usage && (data.usage.total_tokens || data.usage.totalTokenCount);
+  if (tokens) {
+    const st = settings();
+    st.stats.tokens += Number(tokens) || 0;
+  }
   const msg = data.choices && data.choices[0] && data.choices[0].message;
   return (msg && msg.content) || '';
 }
 
-async function generate(messages) {
-  return settings().mode === 'custom' ? generateViaCustom(messages) : generateRawViaST(messages);
+let activeController = null;
+let cancelled = false;
+
+async function callModel(messages) {
+  if (cancelled) throw new Error('已停止');
+  if (settings().mode === 'custom') {
+    activeController = new AbortController();
+    try {
+      const out = await generateViaCustom(messages, activeController.signal);
+      bumpStats();
+      return out;
+    } finally {
+      activeController = null;
+    }
+  }
+  const out = await generateRawViaST(messages);
+  if (cancelled) throw new Error('已停止');
+  bumpStats();
+  return out;
+}
+
+function stopRun() {
+  cancelled = true;
+  if (activeController) activeController.abort();
+  setStatus('sd_status1', '已请求停止。');
+}
+
+async function cachedRun(stage, inputKey, producer, force) {
+  const s = settings();
+  const hit = s.cache[stage];
+  if (!force && hit && hit.key === inputKey) {
+    return { data: hit.data, cached: true };
+  }
+  const data = await producer();
+  s.cache[stage] = { key: inputKey, data };
+  save();
+  return { data, cached: false };
 }
 
 async function pullModels() {
@@ -296,25 +384,28 @@ function updateMode() {
   el('sd_modecustom').style.display = s.mode === 'custom' ? '' : 'none';
 }
 
-function readoutRow(label, value) {
-  return '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(value) + '</div>';
+function readoutRow(label, value, layer) {
+  const btn = layer
+    ? ' <button class="sd-refresh menu_button" data-layer="' + esc(layer) + '" title="只重蒸这一层">重蒸</button>'
+    : '';
+  return '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(value) + btn + '</div>';
 }
 
 function renderReadout(target, data) {
   const parts = [];
   if (data.syntax) {
     const s = data.syntax;
-    parts.push(readoutRow('句法', [s.vocab, s.sentence, s.rhythm, s.punctuation, s.register].filter(Boolean).join('；')));
+    parts.push(readoutRow('句法', [s.vocab, s.sentence, s.rhythm, s.punctuation, s.register].filter(Boolean).join('；'), 'syntax'));
   }
   if (data.object) {
     const o = data.object;
-    parts.push(readoutRow('对象', [o.writes, o.notWrites, o.listener].filter(Boolean).join('；')));
+    parts.push(readoutRow('对象', [o.writes, o.notWrites, o.listener].filter(Boolean).join('；'), 'object'));
   }
   if (data.attitude) {
     const a = data.attitude;
-    parts.push(readoutRow('态度', [a.tragedy, a.comedy, a.intimacy, a.failure, a.time].filter(Boolean).join('；')));
+    parts.push(readoutRow('态度', [a.tragedy, a.comedy, a.intimacy, a.failure, a.time].filter(Boolean).join('；'), 'attitude'));
   }
-  if (data.rhetoric) parts.push(readoutRow('修辞', (data.rhetoric || []).join('；')));
+  if (data.rhetoric) parts.push(readoutRow('修辞', (data.rhetoric || []).join('；'), 'rhetoric'));
   if (data.belief_core) parts.push(readoutRow('核心信念', data.belief_core));
   if (data.position) parts.push(readoutRow('历史定位', data.position));
   if (data.neighbor_diff) parts.push(readoutRow('跟邻居的界', data.neighbor_diff));
@@ -392,7 +483,7 @@ function selectedBlacklist() {
   return (settings().blacklist || []).filter((b) => b.on && b.text.trim()).map((b) => b.text.trim());
 }
 
-async function runRead1() {
+async function runRead1(force) {
   const s = settings();
   s.source = el('sd_source').value;
   s.genre = el('sd_genre').value;
@@ -403,29 +494,29 @@ async function runRead1() {
     setStatus('sd_status1', '先贴语料。', 'error');
     return;
   }
+  cancelled = false;
   setStatus('sd_status1', '读前三遍…');
   el('sd_read1').disabled = true;
   try {
-    const data = parseJSON(await generate(Prompts.read1({ corpus: s.corpus, genre: s.genre })));
+    const withDraft = s.source === 'reference';
+    const key = hashKey({ corpus: s.corpus, genre: s.genre, withDraft });
+    const { data, cached } = await cachedRun(
+      'read1',
+      key,
+      async () => parseJSON(await callModel(Prompts.read1({ corpus: s.corpus, genre: s.genre, withDraft }))),
+      force
+    );
     s.read1 = data;
+    s.draft = withDraft && data.draft ? data.draft : null;
     s.beliefs = (data.beliefs || []).map((b) => ({
       belief: b.belief || '',
       evidence: b.evidence || '',
       counter: b.counter || '',
       on: true
     }));
-    if (s.source === 'reference') {
-      try {
-        s.draft = parseJSON(await generate(Prompts.draftReference({ corpus: s.corpus, genre: s.genre })));
-      } catch (e) {
-        s.draft = null;
-      }
-    } else {
-      s.draft = null;
-    }
     renderReadout(el('sd_readout'), Object.assign({}, data, { draft: s.draft }));
     renderBeliefs();
-    setStatus('sd_status1', '前三遍读完了，去确认信念。', 'ok');
+    setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '前三遍读完了，去确认信念。', 'ok');
     save();
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
@@ -434,22 +525,54 @@ async function runRead1() {
   }
 }
 
-async function runRead2() {
+async function runRefineLayer(layer) {
+  const s = settings();
+  if (!s.read1 || !s.corpus) {
+    setStatus('sd_status1', '先读前三遍。', 'error');
+    return;
+  }
+  cancelled = false;
+  setStatus('sd_status1', '重蒸「' + (Prompts.LAYERS[layer] || layer) + '」…');
+  try {
+    const current = s.read1[layer];
+    const out = await callModel(Prompts.refineLayer({ layer, current, corpus: s.corpus, genre: s.genre }));
+    const parsed = parseJSON(out);
+    if (parsed && parsed.value !== undefined) {
+      s.read1[layer] = parsed.value;
+      renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
+      setStatus('sd_status1', '「' + (Prompts.LAYERS[layer] || layer) + '」重蒸好了。', 'ok');
+      save();
+    } else {
+      setStatus('sd_status1', '重蒸返回格式不对，再试一次。', 'error');
+    }
+  } catch (e) {
+    setStatus('sd_status1', String(e.message || e), 'error');
+  }
+}
+
+async function runRead2(force) {
   const s = settings();
   const beliefs = selectedBeliefs();
   if (!beliefs) {
     setStatus('sd_status2', '至少留一条信念。', 'error');
     return;
   }
+  cancelled = false;
   setStatus('sd_status2', '读后三遍…');
   el('sd_read2').disabled = true;
   try {
-    const data = parseJSON(await generate(Prompts.read2({ corpus: s.corpus, genre: s.genre, beliefs })));
+    const key = hashKey({ corpus: s.corpus, genre: s.genre, beliefs });
+    const { data, cached } = await cachedRun(
+      'read2',
+      key,
+      async () => parseJSON(await callModel(Prompts.read2({ corpus: s.corpus, genre: s.genre, beliefs }))),
+      force
+    );
     s.read2 = data;
     s.blacklist = (data.blacklist || []).map((t) => ({ text: t, on: true }));
     renderReadout(el('sd_position'), data);
     renderBlacklist();
-    setStatus('sd_status2', '后三遍读完了，去补最锋利的反例。', 'ok');
+    setStatus('sd_status2', cached ? '输入没变，用上次结果，未再调用 API。' : '后三遍读完了，去补最锋利的反例。', 'ok');
     save();
   } catch (e) {
     setStatus('sd_status2', String(e.message || e), 'error');
@@ -458,28 +581,39 @@ async function runRead2() {
   }
 }
 
-async function runCompose() {
+async function runCompose(force) {
   const s = settings();
   if (!s.read1 || !s.read2) {
     setStatus('sd_status3', '先把六遍读完。', 'error');
     return;
   }
+  cancelled = false;
   setStatus('sd_status3', '压成块…');
   el('sd_compose').disabled = true;
   try {
-    const out = await generate(
-      Prompts.compose({
-        name: s.name,
-        genre: s.genre,
-        read1: s.read1,
-        read2: s.read2,
-        blacklist: selectedBlacklist(),
-        corpus: s.corpus
-      })
+    const samples = s.read1.samples || [];
+    const key = hashKey({ name: s.name, genre: s.genre, read1: s.read1, read2: s.read2, samples, blacklist: selectedBlacklist() });
+    const { data, cached } = await cachedRun(
+      'compose',
+      key,
+      async () =>
+        (
+          await callModel(
+            Prompts.compose({
+              name: s.name,
+              genre: s.genre,
+              read1: s.read1,
+              read2: s.read2,
+              samples,
+              blacklist: selectedBlacklist()
+            })
+          )
+        ).trim(),
+      force
     );
-    s.block = out.trim();
+    s.block = data;
     el('sd_block').value = s.block;
-    setStatus('sd_status3', '成块了。', 'ok');
+    setStatus('sd_status3', cached ? '输入没变，用上次结果，未再调用 API。' : '成块了。', 'ok');
     save();
   } catch (e) {
     setStatus('sd_status3', String(e.message || e), 'error');
@@ -488,7 +622,7 @@ async function runCompose() {
   }
 }
 
-async function runRewrite() {
+async function runRewrite(force) {
   const s = settings();
   s.block = el('sd_block').value.trim();
   const passage = el('sd_passage').value.trim();
@@ -500,14 +634,21 @@ async function runRewrite() {
     setStatus('sd_status4', '先贴一段默认 AI 腔。', 'error');
     return;
   }
+  cancelled = false;
   setStatus('sd_status4', '改写中…');
   el('sd_dorewrite').disabled = true;
   try {
-    const out = await generate(Prompts.rewrite({ block: s.block, passage }));
+    const key = hashKey({ block: s.block, passage });
+    const { data, cached } = await cachedRun(
+      'rewrite',
+      key,
+      async () => (await callModel(Prompts.rewrite({ block: s.block, passage }))).trim(),
+      force
+    );
     s.passage = passage;
-    s.rewrite = out.trim();
+    s.rewrite = data;
     el('sd_rewrite').value = s.rewrite;
-    setStatus('sd_status4', '判一下像不像。', 'ok');
+    setStatus('sd_status4', cached ? '输入没变，用上次结果，未再调用 API。' : '判一下像不像。', 'ok');
     save();
   } catch (e) {
     setStatus('sd_status4', String(e.message || e), 'error');
@@ -540,12 +681,22 @@ function buildJSON() {
     neighbor_diff: s.read2 ? s.read2.neighbor_diff : '',
     syntax: s.read1 ? s.read1.syntax : null,
     rhetoric: s.read1 ? s.read1.rhetoric : null,
+    samples: s.read1 ? s.read1.samples || [] : [],
     blacklist: selectedBlacklist(),
     block: el('sd_block').value,
     pool: s.read1 || null,
     read2: s.read2 || null,
+    draft: s.draft || null,
     test: { passage: s.passage, rewrite: s.rewrite, verdict: s.verdict },
     play: { mode: s.playMode }
+  };
+}
+
+function clampPos(pos, w, h) {
+  if (!pos) return pos;
+  return {
+    x: Math.max(0, Math.min(window.innerWidth - (w || 0), pos.x)),
+    y: Math.max(0, Math.min(window.innerHeight - (h || 0), pos.y))
   };
 }
 
@@ -555,8 +706,9 @@ function applyFab() {
   if (!f) return;
   f.style.display = s.showFab ? 'flex' : 'none';
   if (s.fabPos) {
-    f.style.left = s.fabPos.x + 'px';
-    f.style.top = s.fabPos.y + 'px';
+    const p = clampPos(s.fabPos, f.offsetWidth || 52, f.offsetHeight || 52);
+    f.style.left = p.x + 'px';
+    f.style.top = p.y + 'px';
     f.style.right = 'auto';
     f.style.bottom = 'auto';
   }
@@ -572,15 +724,26 @@ function applyPanel() {
   }
   p.style.display = 'flex';
   if (s.panelPos) {
-    p.style.left = s.panelPos.x + 'px';
-    p.style.top = s.panelPos.y + 'px';
+    const width = p.offsetWidth || Math.min(420, window.innerWidth * 0.92);
+    const p2 = clampPos(s.panelPos, width, 60);
+    p.style.left = p2.x + 'px';
+    p.style.top = p2.y + 'px';
     p.style.right = 'auto';
+    p.style.bottom = 'auto';
   } else {
     const w = Math.min(420, window.innerWidth * 0.92);
     p.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
     p.style.top = '70px';
     p.style.right = 'auto';
+    p.style.bottom = 'auto';
   }
+}
+
+function applyLayer() {
+  const layer = el('sd_layer');
+  if (!layer) return;
+  const s = settings();
+  layer.style.display = s.showFab || s.panelOpen ? '' : 'none';
 }
 
 function restore() {
@@ -588,6 +751,8 @@ function restore() {
   el('sd_baseurl').value = s.baseUrl || '';
   el('sd_apikey').value = s.apiKey || '';
   el('sd_model').value = s.model || '';
+  el('sd_temp').value = s.temperature != null ? s.temperature : 0.7;
+  el('sd_tempval').textContent = String(el('sd_temp').value);
   updateMode();
   el('sd_source').value = s.source;
   el('sd_genre').value = s.genre;
@@ -602,6 +767,7 @@ function restore() {
   if (s.beliefs && s.beliefs.length) renderBeliefs();
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
+  renderStats();
 }
 
 function makeFab(fab) {
@@ -632,6 +798,7 @@ function makeFab(fab) {
         s.panelOpen = !s.panelOpen;
         save();
         applyPanel();
+        applyLayer();
       } else {
         save();
       }
@@ -643,7 +810,7 @@ function makeFab(fab) {
 
 function makePanelDrag(handle, target, savePos) {
   handle.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.sd-panel-close')) return;
+    if (e.target.closest('.sd-panel-close') || e.target.closest('.sd-panel-stop')) return;
     const rect = target.getBoundingClientRect();
     const startX = e.clientX;
     const startY = e.clientY;
@@ -668,16 +835,30 @@ function makePanelDrag(handle, target, savePos) {
   });
 }
 
+function forceFromEvent(e) {
+  return !!(e && e.shiftKey);
+}
+
 function bind() {
-  el('sd_read1').addEventListener('click', runRead1);
-  el('sd_read2').addEventListener('click', runRead2);
-  el('sd_compose').addEventListener('click', runCompose);
-  el('sd_dorewrite').addEventListener('click', runRewrite);
+  el('sd_read1').addEventListener('click', (e) => runRead1(forceFromEvent(e)));
+  el('sd_read2').addEventListener('click', (e) => runRead2(forceFromEvent(e)));
+  el('sd_compose').addEventListener('click', (e) => runCompose(forceFromEvent(e)));
+  el('sd_dorewrite').addEventListener('click', (e) => runRewrite(forceFromEvent(e)));
+
+  el('sd_readout').addEventListener('click', (e) => {
+    const btn = e.target.closest('.sd-refresh');
+    if (btn) runRefineLayer(btn.dataset.layer);
+  });
 
   el('sd_mode').addEventListener('change', (e) => { settings().mode = e.target.value; save(); updateMode(); });
   el('sd_baseurl').addEventListener('input', (e) => { settings().baseUrl = e.target.value.trim(); save(); });
   el('sd_apikey').addEventListener('input', (e) => { settings().apiKey = e.target.value.trim(); save(); });
   el('sd_model').addEventListener('input', (e) => { settings().model = e.target.value.trim(); save(); });
+  el('sd_temp').addEventListener('input', (e) => {
+    settings().temperature = Number(e.target.value);
+    el('sd_tempval').textContent = String(e.target.value);
+    save();
+  });
   el('sd_pull').addEventListener('click', pullModels);
 
   el('sd_source').addEventListener('change', (e) => { settings().source = e.target.value; save(); });
@@ -704,7 +885,7 @@ function bind() {
   });
   el('sd_unlike').addEventListener('click', () => {
     settings().verdict = 'unlike';
-    setStatus('sd_status4', '不像。点名漂的那层，回去只重蒸那层。', 'error');
+    setStatus('sd_status4', '不像。点某一层的「重蒸」，只重蒸漂的那层。', 'error');
     save();
   });
 
@@ -727,21 +908,37 @@ function bind() {
     settings().showFab = e.target.checked;
     save();
     applyFab();
+    applyLayer();
   });
   el('sd_panel_close').addEventListener('click', () => {
     settings().panelOpen = false;
     save();
     applyPanel();
+    applyLayer();
   });
+  el('sd_stop').addEventListener('click', stopRun);
 
   makeFab(el('sd_fab'));
   makePanelDrag(el('sd_panel_head'), el('sd_panel'), (pos) => {
     settings().panelPos = pos;
     save();
   });
+
+  window.addEventListener('resize', () => {
+    applyFab();
+    applyPanel();
+  });
 }
 
-let bound = false;
+let mounted = false;
+let appReadyHooked = false;
+
+function hookAppReady() {
+  if (appReadyHooked) return;
+  appReadyHooked = true;
+  const { eventSource, event_types } = ctx();
+  eventSource.on(event_types.APP_READY, addUI);
+}
 
 function addUI() {
   const host = document.getElementById('extensions_settings2');
@@ -750,19 +947,24 @@ function addUI() {
     return;
   }
   if (!el('sd_root')) host.insertAdjacentHTML('beforeend', settingsTpl);
-  if (!el('sd_fab')) document.body.insertAdjacentHTML('beforeend', fabTpl);
-  if (!el('sd_panel')) document.body.insertAdjacentHTML('beforeend', panelTpl);
-  if (bound) return;
-  bound = true;
+  if (!el('sd_layer')) {
+    const layer = document.createElement('div');
+    layer.id = 'sd_layer';
+    layer.className = 'sd-layer';
+    layer.innerHTML = fabTpl + panelTpl;
+    document.body.appendChild(layer);
+  }
+  if (mounted) return;
+  mounted = true;
   restore();
   bind();
   applyFab();
   applyPanel();
+  applyLayer();
 }
 
 export function onActivate() {
-  const { eventSource, event_types } = ctx();
-  eventSource.on(event_types.APP_READY, addUI);
+  hookAppReady();
 }
 
 export function onEnable() {
@@ -770,23 +972,19 @@ export function onEnable() {
   if (root) root.style.display = '';
   applyFab();
   applyPanel();
+  applyLayer();
 }
 
 export function onDisable() {
   const root = el('sd_root');
   if (root) root.style.display = 'none';
-  const f = el('sd_fab');
-  if (f) f.style.display = 'none';
-  const p = el('sd_panel');
-  if (p) p.style.display = 'none';
+  const layer = el('sd_layer');
+  if (layer) layer.style.display = 'none';
 }
 
 jQuery(() => {
   try {
-    if (typeof SillyTavern !== 'undefined') {
-      const { eventSource, event_types } = SillyTavern.getContext();
-      eventSource.on(event_types.APP_READY, addUI);
-    }
+    if (typeof SillyTavern !== 'undefined') hookAppReady();
   } catch (e) {
     console.error('[style-distiller] init failed', e);
   }
