@@ -77,6 +77,11 @@
           <span>省流：六遍读合并成一次调用（少花一半调用，分析略粗）</span>
         </label>
         <div class="actions">
+          <button id="card-json" class="ghost" type="button">导入角色卡 JSON</button>
+          <input id="card-file" type="file" accept=".json,application/json" style="display:none">
+          <span class="status" id="status-feed"></span>
+        </div>
+        <div class="actions">
           <button id="btn-read" class="primary" type="button">开始六遍读</button>
           <button id="btn-read-force" class="ghost" type="button">强制重跑</button>
           <span class="status" id="status-read"></span>

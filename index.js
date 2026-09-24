@@ -117,6 +117,11 @@ const panelTpl = `
         <span id="sd_corpus_stat" class="sd-corpus-stat"></span>
       </label>
       <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>省流：六遍读合并成一次调用（少花一半调用，分析略粗）</span></label>
+      <div class="sd-inline">
+        <button id="sd_takecard" class="menu_button">取角色卡</button>
+        <button id="sd_takechat" class="menu_button">取聊天</button>
+        <span id="sd_takestatus" class="sd-status"></span>
+      </div>
       <div class="sd-actions">
         <button id="sd_read1" class="menu_button">开始六遍读</button>
         <span id="sd_status1" class="sd-status"></span>
@@ -1357,6 +1362,53 @@ function bindLayer() {
   el('sd_thrifty').addEventListener('change', (e) => { settings().thrifty = e.target.checked; save(); });
   el('sd_name').addEventListener('input', (e) => { settings().name = e.target.value; save(); });
   el('sd_corpus').addEventListener('input', (e) => { settings().corpus = e.target.value; save(); renderCorpusStat(); });
+
+  function applyTakenCorpus(text, note) {
+    settings().corpus = text;
+    el('sd_corpus').value = text;
+    renderCorpusStat();
+    save();
+    setStatus('sd_takestatus', note, 'ok');
+  }
+
+  el('sd_takecard').addEventListener('click', () => {
+    const c = SillyTavern.getContext();
+    let f = null;
+    try {
+      if (typeof c.getCharacterCardFields === 'function') f = c.getCharacterCardFields();
+      if (!f && c.characters && c.characters[c.characterId]) {
+        const ch = c.characters[c.characterId];
+        f = { description: ch.description, personality: ch.personality, scenario: ch.scenario, mesExamples: ch.mes_example };
+      }
+    } catch (e) {
+      f = null;
+    }
+    if (!f) {
+      setStatus('sd_takestatus', '拿不到当前角色卡。', 'error');
+      return;
+    }
+    const parts = [f.description, f.personality, f.scenario, f.mesExamples || f.mes_example || f.exampleMessages]
+      .map((x) => String(x || '').trim())
+      .filter(Boolean);
+    const text = parts.join('\n\n').trim();
+    if (!text) {
+      setStatus('sd_takestatus', '角色卡里没有可用文字。', 'error');
+      return;
+    }
+    applyTakenCorpus(text, '已取角色卡语料（' + text.length + ' 字），可再增删。');
+  });
+
+  el('sd_takechat').addEventListener('click', () => {
+    const c = SillyTavern.getContext();
+    const chat = Array.isArray(c.chat) ? c.chat : [];
+    const msgs = chat.filter((m) => m && !m.is_user && typeof m.mes === 'string' && m.mes.trim()).map((m) => m.mes.trim());
+    const text = msgs.join('\n\n').trim();
+    if (!text) {
+      setStatus('sd_takestatus', '当前聊天里没有角色发言。', 'error');
+      return;
+    }
+    applyTakenCorpus(text, '已取 ' + msgs.length + ' 条角色发言（' + text.length + ' 字），可再增删。');
+  });
   el('sd_passage').addEventListener('input', (e) => { settings().passage = e.target.value; save(); });
   el('sd_block').addEventListener('input', (e) => { settings().block = e.target.value; save(); });
   el('sd_play').addEventListener('change', (e) => { settings().playMode = e.target.value; save(); });

@@ -1052,6 +1052,29 @@ function bind() {
     saveState();
   });
 
+  $("card-json").addEventListener("click", () => $("card-file").click());
+  $("card-file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const raw = JSON.parse(await file.text());
+      const src = raw && raw.data && typeof raw.data === "object" ? raw.data : raw;
+      const parts = [src.description, src.personality, src.scenario, src.mes_example || src.mesExamples || src.exampleMessages]
+        .map((x) => String(x || "").trim())
+        .filter(Boolean);
+      const text = parts.join("\n\n").trim();
+      if (!text) throw new Error("角色卡里没有可用文字");
+      $("corpus").value = text;
+      state.feed = feedInputs();
+      renderCorpusStat();
+      saveState();
+      setStatus("status-feed", "已取角色卡语料（" + text.length + " 字），可再增删。", "ok");
+    } catch (err) {
+      setStatus("status-feed", "导入失败：" + String(err.message || err), "error");
+    }
+  });
+
   $("copy-block").addEventListener("click", async () => {
     const text = $("block").value;
     try {
