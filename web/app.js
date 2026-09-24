@@ -788,6 +788,47 @@ function snapshotFromJSON(raw) {
   };
 }
 
+function buildLorebookEntry(name, content, uid) {
+  return {
+    uid,
+    key: [name],
+    keysecondary: [],
+    comment: name,
+    content,
+    constant: true,
+    vectorized: false,
+    selective: false,
+    selectiveLogic: 0,
+    addMemo: true,
+    order: 100,
+    position: 0,
+    disable: false,
+    excludeRecursion: false,
+    preventRecursion: false,
+    delayUntilRecursion: false,
+    probability: 100,
+    useProbability: true,
+    depth: 4,
+    group: "",
+    groupOverride: false,
+    groupWeight: 100,
+    scanDepth: null,
+    caseSensitive: null,
+    matchWholeWords: null,
+    useGroupScoring: null,
+    automationId: "",
+    role: null,
+    sticky: 0,
+    cooldown: 0,
+    delay: 0,
+    displayIndex: uid
+  };
+}
+
+function buildLorebook(name, content) {
+  return { name, entries: { 0: buildLorebookEntry(name, content, 0) } };
+}
+
 function renderStyles(selectedId) {
   const sel = $("style-list");
   if (!sel) return;
@@ -1044,6 +1085,32 @@ function bind() {
       setStatus("status-export", "已导入并铺回面板。", "ok");
     } catch (err) {
       setStatus("status-export", "导入失败：" + String(err.message || err), "error");
+    }
+  });
+
+  $("export-lorebook").addEventListener("click", () => {
+    const block = $("block").value.trim();
+    if (!block) {
+      setStatus("status-export", "文风块是空的，先成块。", "error");
+      return;
+    }
+    const name = ((state.feed && state.feed.name) || "").trim() || "文风";
+    download(slug() + "-worldinfo.json", JSON.stringify(buildLorebook(name, block), null, 2));
+    setStatus("status-export", "世界书 JSON 已下载，用「世界信息」的导入加载。", "ok");
+  });
+
+  $("copy-entry").addEventListener("click", async () => {
+    const block = $("block").value.trim();
+    if (!block) {
+      setStatus("status-export", "文风块是空的，先成块。", "error");
+      return;
+    }
+    const name = ((state.feed && state.feed.name) || "").trim() || "文风";
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(buildLorebookEntry(name, block, 0), null, 2));
+      setStatus("status-export", "条目 JSON 已复制。", "ok");
+    } catch (e) {
+      setStatus("status-export", "复制失败，请手动选中。", "error");
     }
   });
 

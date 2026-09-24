@@ -203,6 +203,13 @@ const panelTpl = `
         <input id="sd_importfile" type="file" accept=".json,application/json" style="display:none">
         <span id="sd_status5" class="sd-status"></span>
       </div>
+      <div class="sd-inline">
+        <select id="sd_wilist"></select>
+        <input id="sd_winame" type="text" placeholder="或填新世界书名">
+        <button id="sd_wiexport" class="menu_button">导出世界书</button>
+        <button id="sd_wisave" class="menu_button">写入世界书</button>
+      </div>
+      <div id="sd_wistatus" class="sd-status"></div>
     </div>
   </div>
 </div>`;
@@ -1085,6 +1092,62 @@ function snapshotFromJSON(raw) {
   };
 }
 
+function buildLorebookEntry(name, content, uid) {
+  return {
+    uid,
+    key: [name],
+    keysecondary: [],
+    comment: name,
+    content,
+    constant: true,
+    vectorized: false,
+    selective: false,
+    selectiveLogic: 0,
+    addMemo: true,
+    order: 100,
+    position: 0,
+    disable: false,
+    excludeRecursion: false,
+    preventRecursion: false,
+    delayUntilRecursion: false,
+    probability: 100,
+    useProbability: true,
+    depth: 4,
+    group: '',
+    groupOverride: false,
+    groupWeight: 100,
+    scanDepth: null,
+    caseSensitive: null,
+    matchWholeWords: null,
+    useGroupScoring: null,
+    automationId: '',
+    role: null,
+    sticky: 0,
+    cooldown: 0,
+    delay: 0,
+    displayIndex: uid
+  };
+}
+
+function buildLorebook(name, content) {
+  return { name, entries: { 0: buildLorebookEntry(name, content, 0) } };
+}
+
+function renderWiList() {
+  const sel = el('sd_wilist');
+  if (!sel) return;
+  let names = [];
+  try {
+    const c = SillyTavern.getContext();
+    names = c && typeof c.getWorldInfoNames === 'function' ? c.getWorldInfoNames() : [];
+  } catch (e) {
+    names = [];
+  }
+  sel.innerHTML = names.length
+    ? names.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('')
+    : '<option value="">（没有已有世界书）</option>';
+}
+
 function renderStyles(selectedId) {
   const sel = el('sd_stylelist');
   if (!sel) return;
@@ -1180,6 +1243,7 @@ function restoreLayer() {
   if (s.blacklist && s.blacklist.length) renderBlacklist();
   renderUncertain();
   renderStyles();
+  renderWiList();
   renderStats();
 }
 
@@ -1345,6 +1409,51 @@ function bindLayer() {
       setStatus('sd_status5', '已导入并铺回面板。', 'ok');
     } catch (err) {
       setStatus('sd_status5', '导入失败：' + String(err.message || err), 'error');
+    }
+  });
+
+  el('sd_wiexport').addEventListener('click', () => {
+    const s = settings();
+    const block = el('sd_block').value.trim();
+    if (!block) {
+      setStatus('sd_wistatus', '文风块是空的，先成块。', 'error');
+      return;
+    }
+    const name = s.name.trim() || '文风';
+    download(slug() + '-worldinfo.json', JSON.stringify(buildLorebook(name, block), null, 2));
+    setStatus('sd_wistatus', '世界书 JSON 已下载，用「世界信息」的导入加载。', 'ok');
+  });
+
+  el('sd_wisave').addEventListener('click', async () => {
+    const c = SillyTavern.getContext();
+    if (typeof c.loadWorldInfo !== 'function' || typeof c.saveWorldInfo !== 'function') {
+      setStatus('sd_wistatus', '这本酒馆版本没有世界书写入接口，请改用「导出世界书」。', 'error');
+      return;
+    }
+    const s = settings();
+    const block = el('sd_block').value.trim();
+    if (!block) {
+      setStatus('sd_wistatus', '文风块是空的，先成块。', 'error');
+      return;
+    }
+    const pick = el('sd_wilist').value || '';
+    const name = el('sd_winame').value.trim() || pick || s.name.trim() || '文风';
+    const key = s.name.trim() || name;
+    if (!window.confirm('把文风块作为一条常驻 entry 写入世界书「' + name + '」？\n触发关键词：' + key)) return;
+    try {
+      const data = (await c.loadWorldInfo(name)) || { entries: {} };
+      if (!data.entries) data.entries = {};
+      const uids = Object.keys(data.entries)
+        .map((k) => Number(data.entries[k] && data.entries[k].uid != null ? data.entries[k].uid : k))
+        .filter((n) => Number.isFinite(n));
+      const uid = uids.length ? Math.max(...uids) + 1 : 0;
+      data.entries[uid] = buildLorebookEntry(key, block, uid);
+      await c.saveWorldInfo(name, data, true);
+      if (typeof c.reloadWorldInfoEditor === 'function') c.reloadWorldInfoEditor(name);
+      renderWiList();
+      setStatus('sd_wistatus', '已写入「' + name + '」，去「世界信息」看看。', 'ok');
+    } catch (e) {
+      setStatus('sd_wistatus', '写入失败：' + String(e.message || e), 'error');
     }
   });
 
