@@ -22,10 +22,14 @@ const defaultSettings = Object.freeze({
   passage: DEFAULT_PASSAGE,
   rewrite: '',
   verdict: '',
-  playMode: 'none'
+  playMode: 'none',
+  showFab: true,
+  fabPos: null,
+  panelPos: null,
+  panelOpen: false
 });
 
-const tpl = `
+const settingsTpl = `
 <div class="sd-root inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
     <b>大厨烹饪处 · 文风蒸馏</b>
@@ -33,7 +37,22 @@ const tpl = `
   </div>
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
+    <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
+    <div class="sd-actions">
+      <button id="sd_open" class="menu_button">打开大厨烹饪处</button>
+    </div>
+  </div>
+</div>`;
 
+const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处"><i class="fa-solid fa-utensils"></i></div>`;
+
+const panelTpl = `
+<div class="sd-panel" id="sd_panel">
+  <div class="sd-panel-head" id="sd_panel_head">
+    <span>大厨烹饪处 · 文风蒸馏</span>
+    <i class="fa-solid fa-xmark sd-panel-close" id="sd_panel_close"></i>
+  </div>
+  <div class="sd-panel-body">
     <div class="sd-sec">
       <div class="sd-sec-title">生成方式</div>
       <label class="sd-field"><span>用哪个模型</span>
@@ -60,31 +79,34 @@ const tpl = `
       </div>
     </div>
 
-    <div class="sd-grid2">
-      <label class="sd-field"><span>来源</span>
-        <select id="sd_source">
-          <option value="mine">我的文字（只出条目，等你点）</option>
-          <option value="reference">参考文字（另出可贴草稿 + 拿不准清单）</option>
-        </select>
+    <div class="sd-sec">
+      <div class="sd-sec-title">喂料</div>
+      <div class="sd-grid2">
+        <label class="sd-field"><span>来源</span>
+          <select id="sd_source">
+            <option value="mine">我的文字（只出条目，等你点）</option>
+            <option value="reference">参考文字（另出可贴草稿 + 拿不准清单）</option>
+          </select>
+        </label>
+        <label class="sd-field"><span>体裁</span>
+          <select id="sd_genre">
+            <option value="narration">叙事</option>
+            <option value="dialogue">对白</option>
+            <option value="interior">内心</option>
+            <option value="action">动作</option>
+          </select>
+        </label>
+      </div>
+      <label class="sd-field"><span>名字</span>
+        <input id="sd_name" type="text" placeholder="例如：冷硬短句 · 身体叙事">
       </label>
-      <label class="sd-field"><span>体裁</span>
-        <select id="sd_genre">
-          <option value="narration">叙事</option>
-          <option value="dialogue">对白</option>
-          <option value="interior">内心</option>
-          <option value="action">动作</option>
-        </select>
+      <label class="sd-field"><span>语料</span>
+        <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
       </label>
-    </div>
-    <label class="sd-field"><span>名字</span>
-      <input id="sd_name" type="text" placeholder="例如：冷硬短句 · 身体叙事">
-    </label>
-    <label class="sd-field"><span>语料</span>
-      <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
-    </label>
-    <div class="sd-actions">
-      <button id="sd_read1" class="menu_button">开始六遍读</button>
-      <span id="sd_status1" class="sd-status"></span>
+      <div class="sd-actions">
+        <button id="sd_read1" class="menu_button">开始六遍读</button>
+        <span id="sd_status1" class="sd-status"></span>
+      </div>
     </div>
 
     <div class="sd-sec">
@@ -192,9 +214,13 @@ function setStatus(id, text, kind) {
   node.textContent = text || '';
 }
 
-function toast(kind, text) {
-  if (typeof toastr !== 'undefined') toastr[kind](text);
-  else console.log('[style-distiller]', text);
+function parseJSON(text) {
+  let s = String(text || '').trim();
+  s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const a = s.indexOf('{');
+  const b = s.lastIndexOf('}');
+  if (a >= 0 && b > a) s = s.slice(a, b + 1);
+  return JSON.parse(s);
 }
 
 async function generateRawViaST(messages) {
@@ -272,15 +298,6 @@ function updateMode() {
   el('sd_modecustom').style.display = s.mode === 'custom' ? '' : 'none';
 }
 
-function parseJSON(text) {
-  let s = String(text || '').trim();
-  s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-  const a = s.indexOf('{');
-  const b = s.lastIndexOf('}');
-  if (a >= 0 && b > a) s = s.slice(a, b + 1);
-  return JSON.parse(s);
-}
-
 function readoutRow(label, value) {
   return '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(value) + '</div>';
 }
@@ -307,12 +324,14 @@ function renderReadout(target, data) {
     parts.push(readoutRow('参考草稿', data.draft.draft || ''));
     parts.push(readoutRow('拿不准', (data.draft.uncertain || []).join('；')));
   }
-  target.innerHTML = parts.join('') || '<div class="sd-row sd-muted">没有结果。</div>';
+  if (target) target.innerHTML = parts.join('') || '<div class="sd-row sd-muted">没有结果。</div>';
 }
 
 function renderBeliefs() {
   const s = settings();
-  el('sd_beliefs').innerHTML = (s.beliefs || [])
+  const target = el('sd_beliefs');
+  if (!target) return;
+  target.innerHTML = (s.beliefs || [])
     .map(
       (b, i) =>
         '<div class="sd-card' + (b.on ? '' : ' sd-off') + '" data-i="' + i + '">' +
@@ -323,7 +342,7 @@ function renderBeliefs() {
     )
     .join('');
 
-  el('sd_beliefs').querySelectorAll('.sd-card').forEach((card) => {
+  target.querySelectorAll('.sd-card').forEach((card) => {
     const i = Number(card.dataset.i);
     card.querySelector('.sd-bon').addEventListener('change', (e) => {
       settings().beliefs[i].on = e.target.checked;
@@ -339,7 +358,9 @@ function renderBeliefs() {
 
 function renderBlacklist() {
   const s = settings();
-  el('sd_blacklist').innerHTML = (s.blacklist || [])
+  const target = el('sd_blacklist');
+  if (!target) return;
+  target.innerHTML = (s.blacklist || [])
     .map(
       (b, i) =>
         '<div class="sd-card' + (b.on ? '' : ' sd-off') + '" data-i="' + i + '">' +
@@ -348,7 +369,7 @@ function renderBlacklist() {
     )
     .join('');
 
-  el('sd_blacklist').querySelectorAll('.sd-card').forEach((card) => {
+  target.querySelectorAll('.sd-card').forEach((card) => {
     const i = Number(card.dataset.i);
     card.querySelector('.sd-kon').addEventListener('change', (e) => {
       settings().blacklist[i].on = e.target.checked;
@@ -530,6 +551,40 @@ function buildJSON() {
   };
 }
 
+function applyFab() {
+  const s = settings();
+  const f = el('sd_fab');
+  if (!f) return;
+  f.style.display = s.showFab ? 'flex' : 'none';
+  if (s.fabPos) {
+    f.style.left = s.fabPos.x + 'px';
+    f.style.top = s.fabPos.y + 'px';
+    f.style.right = 'auto';
+    f.style.bottom = 'auto';
+  }
+}
+
+function applyPanel() {
+  const s = settings();
+  const p = el('sd_panel');
+  if (!p) return;
+  if (!s.panelOpen) {
+    p.style.display = 'none';
+    return;
+  }
+  p.style.display = 'flex';
+  if (s.panelPos) {
+    p.style.left = s.panelPos.x + 'px';
+    p.style.top = s.panelPos.y + 'px';
+    p.style.right = 'auto';
+  } else {
+    const w = Math.min(420, window.innerWidth * 0.92);
+    p.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
+    p.style.top = '70px';
+    p.style.right = 'auto';
+  }
+}
+
 function restore() {
   const s = settings();
   el('sd_baseurl').value = s.baseUrl || '';
@@ -544,10 +599,75 @@ function restore() {
   el('sd_rewrite').value = s.rewrite || '';
   el('sd_block').value = s.block || '';
   el('sd_play').value = s.playMode || 'none';
+  el('sd_showfab').checked = !!s.showFab;
   if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
   if (s.beliefs && s.beliefs.length) renderBeliefs();
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
+}
+
+function makeFab(fab) {
+  fab.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const rect = fab.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origX = rect.left;
+    const origY = rect.top;
+    let moved = false;
+    const move = (ev) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (Math.abs(dx) + Math.abs(dy) > 5) moved = true;
+      fab.style.left = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, origX + dx)) + 'px';
+      fab.style.top = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, origY + dy)) + 'px';
+      fab.style.right = 'auto';
+      fab.style.bottom = 'auto';
+    };
+    const up = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      const r = fab.getBoundingClientRect();
+      const s = settings();
+      s.fabPos = { x: r.left, y: r.top };
+      if (!moved) {
+        s.panelOpen = !s.panelOpen;
+        save();
+        applyPanel();
+      } else {
+        save();
+      }
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
+}
+
+function makePanelDrag(handle, target, savePos) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.sd-panel-close')) return;
+    const rect = target.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origX = rect.left;
+    const origY = rect.top;
+    const move = (ev) => {
+      const x = Math.max(0, Math.min(window.innerWidth - 60, origX + ev.clientX - startX));
+      const y = Math.max(0, Math.min(window.innerHeight - 44, origY + ev.clientY - startY));
+      target.style.left = x + 'px';
+      target.style.top = y + 'px';
+      target.style.right = 'auto';
+      target.style.bottom = 'auto';
+    };
+    const up = () => {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      const r = target.getBoundingClientRect();
+      savePos({ x: r.left, y: r.top });
+    };
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  });
 }
 
 function bind() {
@@ -604,18 +724,44 @@ function bind() {
     download(slug() + '.json', JSON.stringify(buildJSON(), null, 2));
     setStatus('sd_status5', 'JSON 已下载。', 'ok');
   });
+
+  el('sd_showfab').addEventListener('change', (e) => {
+    settings().showFab = e.target.checked;
+    save();
+    applyFab();
+  });
+  el('sd_open').addEventListener('click', () => {
+    settings().panelOpen = true;
+    save();
+    applyPanel();
+  });
+  el('sd_panel_close').addEventListener('click', () => {
+    settings().panelOpen = false;
+    save();
+    applyPanel();
+  });
+
+  makeFab(el('sd_fab'));
+  makePanelDrag(el('sd_panel_head'), el('sd_panel'), (pos) => {
+    settings().panelPos = pos;
+    save();
+  });
 }
 
 function addUI() {
-  if (el('sd_source')) return;
+  if (el('sd_panel')) return;
   const host = document.getElementById('extensions_settings2');
   if (!host) {
     setTimeout(addUI, 500);
     return;
   }
-  host.insertAdjacentHTML('beforeend', tpl);
+  host.insertAdjacentHTML('beforeend', settingsTpl);
+  document.body.insertAdjacentHTML('beforeend', fabTpl);
+  document.body.insertAdjacentHTML('beforeend', panelTpl);
   restore();
   bind();
+  applyFab();
+  applyPanel();
 }
 
 export function onActivate() {
@@ -626,11 +772,16 @@ export function onActivate() {
 export function onEnable() {
   const root = document.querySelector('.sd-root');
   if (root) root.style.display = '';
+  applyFab();
 }
 
 export function onDisable() {
   const root = document.querySelector('.sd-root');
   if (root) root.style.display = 'none';
+  const f = el('sd_fab');
+  if (f) f.style.display = 'none';
+  const p = el('sd_panel');
+  if (p) p.style.display = 'none';
 }
 
 jQuery(() => {
