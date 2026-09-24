@@ -248,3 +248,31 @@
   padding-top: 0;
   border-top: none;
 }
+
+.sd-corpus-stat {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.sd-corpus-stat.sd-corpus-warn {
+  color: #e0b34d;
+  opacity: 1;
+}
+
+.sd-corpus-stat.sd-corpus-over {
+  color: #e06a6a;
+  opacity: 1;
+}
+
+.sd-kgroup {
+  margin-bottom: 8px;
+}
+
+.sd-kgroup-title {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+  margin: 6px 0 2px;
+}

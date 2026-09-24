@@ -111,6 +111,7 @@ const panelTpl = `
       </label>
       <label class="sd-field"><span>语料</span>
         <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
+        <span id="sd_corpus_stat" class="sd-corpus-stat"></span>
       </label>
       <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>省流：六遍读合并成一次调用（少花一半调用，分析略粗）</span></label>
       <div class="sd-actions">
@@ -272,6 +273,37 @@ function renderStats() {
   if (s.stats.tokens) txt += ' · ' + s.stats.tokens + ' tok';
   if (el('sd_stats')) el('sd_stats').textContent = txt;
   if (el('sd_stats_root')) el('sd_stats_root').textContent = s.stats.calls + ' 次' + (s.stats.saved ? '（省 ' + s.stats.saved + ' 次）' : '');
+}
+
+function estimateTokens(text) {
+  const cjk = (String(text).match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
+  const other = Math.max(0, String(text).length - cjk);
+  return Math.round(cjk * 0.9 + other / 4);
+}
+
+function renderCorpusStat() {
+  const node = el('sd_corpus_stat');
+  if (!node) return;
+  const text = (el('sd_corpus') && el('sd_corpus').value) || '';
+  if (!text.trim()) {
+    node.className = 'sd-corpus-stat';
+    node.textContent = '还没贴语料。';
+    return;
+  }
+  const chars = text.replace(/\s/g, '').length;
+  const tokens = estimateTokens(text);
+  const paras = text.split(/\n\s*\n/).filter((p) => p.trim()).length;
+  let msg = '约 ' + chars + ' 字 · 约 ' + tokens + ' token · ' + paras + ' 段';
+  let kind = '';
+  if (tokens > 16000) {
+    msg += ' · 很长，强烈建议分几批喂，否则容易爆上下文也费钱';
+    kind = 'over';
+  } else if (tokens > 8000) {
+    msg += ' · 偏长，可考虑分批';
+    kind = 'warn';
+  }
+  node.className = 'sd-corpus-stat' + (kind ? ' sd-corpus-' + kind : '');
+  node.textContent = msg;
 }
 
 async function generateRawViaST(messages) {
@@ -491,17 +523,62 @@ function renderBeliefs() {
   });
 }
 
+const BLACKLIST_KINDS = ['手法', '情绪', '用词', '其他'];
+const BLACKLIST_ALIASES = { 手法: '手法', 技巧: '手法', 情绪: '情绪', 情感: '情绪', 用词: '用词', 词汇: '用词', 词: '用词', 其他: '其他' };
+
+function normalizeBlacklistKind(kind, text) {
+  const k = String(kind || '').trim();
+  if (BLACKLIST_ALIASES[k]) return BLACKLIST_ALIASES[k];
+  const t = String(text || '');
+  if (t && t.length <= 8 && !/[，。！？；：,.!?;:]/.test(t)) return '用词';
+  return '其他';
+}
+
+function mapBlacklist(list) {
+  const seen = new Set();
+  const out = [];
+  (list || []).forEach((item) => {
+    const text = String(typeof item === 'string' ? item : (item && item.text) || '').trim();
+    if (!text) return;
+    const key = text.replace(/\s+/g, '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ text, kind: normalizeBlacklistKind(typeof item === 'string' ? '' : item.kind, text), on: true });
+  });
+  return out;
+}
+
 function renderBlacklist() {
   const s = settings();
   const target = el('sd_blacklist');
   if (!target) return;
-  target.innerHTML = (s.blacklist || [])
-    .map(
-      (b, i) =>
-        '<div class="sd-card' + (b.on ? '' : ' sd-off') + '" data-i="' + i + '">' +
-        '<input type="checkbox" class="sd-kon"' + (b.on ? ' checked' : '') + '>' +
-        '<div class="sd-cardbody"><input type="text" class="sd-ktext" value="' + esc(b.text) + '"></div></div>'
-    )
+  const list = s.blacklist || [];
+  if (!list.length) {
+    target.innerHTML = '';
+    return;
+  }
+  const groups = new Map();
+  list.forEach((b, i) => {
+    const kind = BLACKLIST_KINDS.includes(b.kind) ? b.kind : '其他';
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind).push({ b, i });
+  });
+  target.innerHTML = BLACKLIST_KINDS.filter((k) => groups.has(k))
+    .map((k) => {
+      const items = groups
+        .get(k)
+        .map(
+          ({ b, i }) =>
+            '<div class="sd-card' + (b.on ? '' : ' sd-off') + '" data-i="' + i + '">' +
+            '<input type="checkbox" class="sd-kon"' + (b.on ? ' checked' : '') + '>' +
+            '<div class="sd-cardbody"><input type="text" class="sd-ktext" value="' + esc(b.text) + '"></div></div>'
+        )
+        .join('');
+      return (
+        '<div class="sd-kgroup"><div class="sd-kgroup-title">' + esc(k) +
+        ' <span class="sd-hint">' + groups.get(k).length + ' 条</span></div>' + items + '</div>'
+      );
+    })
     .join('');
 
   target.querySelectorAll('.sd-card').forEach((card) => {
@@ -586,7 +663,7 @@ async function runRead1(force) {
         blacklist: data.blacklist || [],
         belief_core: data.belief_core || ''
       };
-      s.blacklist = (data.blacklist || []).map((t) => ({ text: t, on: true }));
+      s.blacklist = mapBlacklist(data.blacklist);
       pushCache('read2', hashKey({ corpus: s.corpus, genre: s.genre, beliefs: selectedBeliefs() }), s.read2);
       renderReadout(el('sd_position'), s.read2);
       renderBlacklist();
@@ -651,7 +728,7 @@ async function runRead2(force) {
       force
     );
     s.read2 = data;
-    s.blacklist = (data.blacklist || []).map((t) => ({ text: t, on: true }));
+    s.blacklist = mapBlacklist(data.blacklist);
     renderReadout(el('sd_position'), data);
     renderBlacklist();
     setStatus('sd_status2', cached ? '输入没变，用上次结果，未再调用 API。' : '后三遍读完了，去补最锋利的反例。', 'ok');
@@ -848,6 +925,7 @@ function restoreLayer() {
   el('sd_thrifty').checked = !!s.thrifty;
   el('sd_name').value = s.name;
   el('sd_corpus').value = s.corpus;
+  renderCorpusStat();
   el('sd_passage').value = s.passage || DEFAULT_PASSAGE;
   el('sd_rewrite').value = s.rewrite || '';
   el('sd_block').value = s.block || '';
@@ -960,7 +1038,7 @@ function bindLayer() {
   el('sd_genre').addEventListener('change', (e) => { settings().genre = e.target.value; save(); });
   el('sd_thrifty').addEventListener('change', (e) => { settings().thrifty = e.target.checked; save(); });
   el('sd_name').addEventListener('input', (e) => { settings().name = e.target.value; save(); });
-  el('sd_corpus').addEventListener('input', (e) => { settings().corpus = e.target.value; save(); });
+  el('sd_corpus').addEventListener('input', (e) => { settings().corpus = e.target.value; save(); renderCorpusStat(); });
   el('sd_passage').addEventListener('input', (e) => { settings().passage = e.target.value; save(); });
   el('sd_block').addEventListener('input', (e) => { settings().block = e.target.value; save(); });
   el('sd_play').addEventListener('change', (e) => { settings().playMode = e.target.value; save(); });

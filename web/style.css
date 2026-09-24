@@ -407,3 +407,28 @@ button.refresh {
   padding: 2px 8px;
   font-size: 12px;
 }
+
+.corpus-stat {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+
+.corpus-stat.corpus-warn {
+  color: #d9a441;
+}
+
+.corpus-stat.corpus-over {
+  color: #d96a6a;
+}
+
+.k-group {
+  margin-bottom: 8px;
+}
+
+.k-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 6px 0 2px;
+}

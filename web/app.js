@@ -120,6 +120,37 @@ function renderStats() {
   if ($("wfd-stats")) $("wfd-stats").textContent = txt;
 }
 
+function estimateTokens(text) {
+  const cjk = (String(text).match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
+  const other = Math.max(0, String(text).length - cjk);
+  return Math.round(cjk * 0.9 + other / 4);
+}
+
+function renderCorpusStat() {
+  const node = $("corpus-stat");
+  if (!node) return;
+  const text = ($("corpus") && $("corpus").value) || "";
+  if (!text.trim()) {
+    node.className = "corpus-stat";
+    node.textContent = "还没贴语料。";
+    return;
+  }
+  const chars = text.replace(/\s/g, "").length;
+  const tokens = estimateTokens(text);
+  const paras = text.split(/\n\s*\n/).filter((p) => p.trim()).length;
+  let msg = "约 " + chars + " 字 · 约 " + tokens + " token · " + paras + " 段";
+  let kind = "";
+  if (tokens > 16000) {
+    msg += " · 很长，强烈建议分几批喂，否则容易爆上下文也费钱";
+    kind = "over";
+  } else if (tokens > 8000) {
+    msg += " · 偏长，可考虑分批";
+    kind = "warn";
+  }
+  node.className = "corpus-stat" + (kind ? " corpus-" + kind : "");
+  node.textContent = msg;
+}
+
 function feedInputs() {
   return {
     source: $("source").value,
@@ -301,20 +332,64 @@ function renderRead2(data) {
   parts.push(row("跟邻居的界", data.neighbor_diff || ""));
   $("position-output").innerHTML = parts.join("");
 
-  state.blacklist = (data.blacklist || []).map((t) => ({ text: t, on: true }));
+  state.blacklist = mapBlacklist(data.blacklist);
   renderBlacklist();
 }
 
+const BLACKLIST_KINDS = ["手法", "情绪", "用词", "其他"];
+const BLACKLIST_ALIASES = { 手法: "手法", 技巧: "手法", 情绪: "情绪", 情感: "情绪", 用词: "用词", 词汇: "用词", 词: "用词", 其他: "其他" };
+
+function normalizeBlacklistKind(kind, text) {
+  const k = String(kind || "").trim();
+  if (BLACKLIST_ALIASES[k]) return BLACKLIST_ALIASES[k];
+  const t = String(text || "");
+  if (t && t.length <= 8 && !/[，。！？；：,.!?;:]/.test(t)) return "用词";
+  return "其他";
+}
+
+function mapBlacklist(list) {
+  const seen = new Set();
+  const out = [];
+  (list || []).forEach((item) => {
+    const text = String(typeof item === "string" ? item : (item && item.text) || "").trim();
+    if (!text) return;
+    const key = text.replace(/\s+/g, "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ text, kind: normalizeBlacklistKind(typeof item === "string" ? "" : item.kind, text), on: true });
+  });
+  return out;
+}
+
 function renderBlacklist() {
-  $("blacklist-list").innerHTML = state.blacklist
-    .map(
-      (b, i) =>
-        '<div class="card' + (b.on ? "" : " off") + '" data-i="' + i + '">' +
-        '<input type="checkbox" class="k-on"' + (b.on ? " checked" : "") + ">" +
-        '<div class="body"><input type="text" class="k-text" value="' + esc(b.text) + '"></div></div>'
-    )
+  const target = $("blacklist-list");
+  if (!target) return;
+  const list = state.blacklist || [];
+  if (!list.length) {
+    target.innerHTML = "";
+    return;
+  }
+  const groups = new Map();
+  list.forEach((b, i) => {
+    const kind = BLACKLIST_KINDS.includes(b.kind) ? b.kind : "其他";
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind).push({ b, i });
+  });
+  target.innerHTML = BLACKLIST_KINDS.filter((k) => groups.has(k))
+    .map((k) => {
+      const items = groups
+        .get(k)
+        .map(
+          ({ b, i }) =>
+            '<div class="card' + (b.on ? "" : " off") + '" data-i="' + i + '">' +
+            '<input type="checkbox" class="k-on"' + (b.on ? " checked" : "") + ">" +
+            '<div class="body"><input type="text" class="k-text" value="' + esc(b.text) + '"></div></div>'
+        )
+        .join("");
+      return '<div class="k-group"><div class="k-group-title">' + esc(k) + ' <span class="muted">' + groups.get(k).length + " 条</span></div>" + items + "</div>";
+    })
     .join("");
-  $("blacklist-list").querySelectorAll(".card").forEach((card) => {
+  target.querySelectorAll(".card").forEach((card) => {
     const i = Number(card.dataset.i);
     card.querySelector(".k-on").addEventListener("change", (e) => {
       state.blacklist[i].on = e.target.checked;
@@ -671,6 +746,7 @@ function restore() {
   $("thrifty").checked = state.thrifty !== false;
   $("name").value = state.feed.name || "";
   $("corpus").value = state.feed.corpus || "";
+  renderCorpusStat();
   $("passage").value = (state.test && state.test.passage) || DEFAULT_PASSAGE;
   $("rewrite").value = (state.test && state.test.rewrite) || "";
   $("block").value = state.block || "";
@@ -738,10 +814,12 @@ function bind() {
     $(id).addEventListener("input", () => {
       state.feed = feedInputs();
       saveState();
+      if (id === "corpus") renderCorpusStat();
     });
     $(id).addEventListener("change", () => {
       state.feed = feedInputs();
       saveState();
+      if (id === "corpus") renderCorpusStat();
     });
   });
 
