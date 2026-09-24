@@ -199,6 +199,8 @@ const panelTpl = `
       <div class="sd-actions">
         <button id="sd_copy" class="menu_button">复制文风块</button>
         <button id="sd_dljson" class="menu_button">下载 JSON</button>
+        <button id="sd_import" class="menu_button">导入 JSON</button>
+        <input id="sd_importfile" type="file" accept=".json,application/json" style="display:none">
         <span id="sd_status5" class="sd-status"></span>
       </div>
     </div>
@@ -1047,6 +1049,42 @@ function applySnapshot(data) {
   save();
 }
 
+function normalizeBeliefs(list) {
+  return (list || []).map((b) =>
+    typeof b === 'string'
+      ? { belief: b, evidence: '', counter: '', on: true }
+      : { belief: b.belief || '', evidence: b.evidence || '', counter: b.counter || '', on: b.on !== false }
+  );
+}
+
+function snapshotFromJSON(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const read1 = raw.pool || raw.k1 || (raw.syntax ? raw : null);
+  const read2 = raw.read2 || raw.k2 || null;
+  if (!read1 && !read2 && !raw.block) return null;
+  const draft = raw.draft || (read1 && read1.draft) || null;
+  const test = raw.test || {};
+  const play = raw.play || {};
+  return {
+    name: raw.name || '',
+    source: raw.source || 'mine',
+    genre: raw.genre || 'narration',
+    read1: read1 || null,
+    beliefs: normalizeBeliefs(raw.beliefs || (read1 && read1.beliefs)),
+    read2: read2,
+    blacklist: mapBlacklist(raw.blacklist || (read2 && read2.blacklist)),
+    draft: draft,
+    uncertain: (raw.uncertain || (draft && draft.uncertain) || []).map((u) =>
+      typeof u === 'string' ? { q: u, ruling: '' } : { q: u.q || '', ruling: u.ruling || '' }
+    ),
+    block: raw.block || '',
+    passage: test.passage || DEFAULT_PASSAGE,
+    rewrite: test.rewrite || '',
+    verdict: test.verdict || '',
+    playMode: play.mode || 'none'
+  };
+}
+
 function renderStyles(selectedId) {
   const sel = el('sd_stylelist');
   if (!sel) return;
@@ -1292,6 +1330,22 @@ function bindLayer() {
   el('sd_dljson').addEventListener('click', () => {
     download(slug() + '.json', JSON.stringify(buildJSON(), null, 2));
     setStatus('sd_status5', 'JSON 已下载。', 'ok');
+  });
+
+  el('sd_import').addEventListener('click', () => el('sd_importfile').click());
+  el('sd_importfile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const raw = JSON.parse(await file.text());
+      const snap = snapshotFromJSON(raw);
+      if (!snap) throw new Error('看不懂这个文件');
+      applySnapshot(snap);
+      setStatus('sd_status5', '已导入并铺回面板。', 'ok');
+    } catch (err) {
+      setStatus('sd_status5', '导入失败：' + String(err.message || err), 'error');
+    }
   });
 
   el('sd_stylesave').addEventListener('click', () => {

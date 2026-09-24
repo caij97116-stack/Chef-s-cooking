@@ -756,6 +756,38 @@ function applySnapshot(data) {
   saveState();
 }
 
+function normalizeBeliefs(list) {
+  return (list || []).map((b) =>
+    typeof b === "string"
+      ? { belief: b, evidence: "", counter: "", on: true }
+      : { belief: b.belief || "", evidence: b.evidence || "", counter: b.counter || "", on: b.on !== false }
+  );
+}
+
+function snapshotFromJSON(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const read1 = raw.pool || raw.k1 || (raw.syntax ? raw : null);
+  const read2 = raw.read2 || raw.k2 || null;
+  if (!read1 && !read2 && !raw.block) return null;
+  const draft = raw.draft || (read1 && read1.draft) || null;
+  const test = raw.test || {};
+  const play = raw.play || {};
+  return {
+    feed: { source: raw.source || "mine", genre: raw.genre || "narration", name: raw.name || "", corpus: raw.corpus || "" },
+    read1: read1 || null,
+    beliefs: normalizeBeliefs(raw.beliefs || (read1 && read1.beliefs)),
+    read2: read2,
+    blacklist: mapBlacklist(raw.blacklist || (read2 && read2.blacklist)),
+    draft: draft,
+    uncertain: (raw.uncertain || (draft && draft.uncertain) || []).map((u) =>
+      typeof u === "string" ? { q: u, ruling: "" } : { q: u.q || "", ruling: u.ruling || "" }
+    ),
+    block: raw.block || "",
+    test: { passage: test.passage || DEFAULT_PASSAGE, rewrite: test.rewrite || "", verdict: test.verdict || "" },
+    play: { mode: play.mode || "none" }
+  };
+}
+
 function renderStyles(selectedId) {
   const sel = $("style-list");
   if (!sel) return;
@@ -997,6 +1029,22 @@ function bind() {
   $("download-pool").addEventListener("click", () => {
     download(slug() + "-pool.json", JSON.stringify({ k1: state.read1, k2: state.read2, draft: state.draft }, null, 2));
     setStatus("status-export", "蒸馏池已下载。", "ok");
+  });
+
+  $("import-json").addEventListener("click", () => $("import-file").click());
+  $("import-file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const raw = JSON.parse(await file.text());
+      const snap = snapshotFromJSON(raw);
+      if (!snap) throw new Error("看不懂这个文件");
+      applySnapshot(snap);
+      setStatus("status-export", "已导入并铺回面板。", "ok");
+    } catch (err) {
+      setStatus("status-export", "导入失败：" + String(err.message || err), "error");
+    }
   });
 
   $("style-save").addEventListener("click", () => {
