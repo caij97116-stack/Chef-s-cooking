@@ -17,6 +17,7 @@ const state = {
   read2: null,
   blacklist: [],
   draft: null,
+  uncertain: [],
   block: "",
   test: { passage: DEFAULT_PASSAGE, rewrite: "", verdict: "" },
   play: { mode: "none" },
@@ -339,6 +340,38 @@ function collectBeliefs() {
   return state.beliefs.filter((b) => b.on && b.belief.trim()).map((b) => "- " + b.belief.trim()).join("\n");
 }
 
+function renderUncertain() {
+  const wrap = $("step-uncertain");
+  const target = $("uncertain-list");
+  if (!wrap || !target) return;
+  const list = state.uncertain || [];
+  wrap.style.display = list.length ? "" : "none";
+  wrap.classList.toggle("locked", !list.length);
+  target.innerHTML = list
+    .map(
+      (u, i) =>
+        '<div class="card" data-i="' + i + '"><div class="body">' +
+        '<div class="meta">拿不准：' + esc(u.q) + "</div>" +
+        '<input type="text" class="u-text" placeholder="你定：……" value="' + esc(u.ruling || "") + '">' +
+        "</div></div>"
+    )
+    .join("");
+  target.querySelectorAll(".card").forEach((card) => {
+    const i = Number(card.dataset.i);
+    card.querySelector(".u-text").addEventListener("input", (e) => {
+      state.uncertain[i].ruling = e.target.value;
+      saveState();
+    });
+  });
+}
+
+function collectRulings() {
+  return (state.uncertain || [])
+    .filter((u) => u.ruling && u.ruling.trim())
+    .map((u) => "- " + String(u.q).trim() + " → " + u.ruling.trim())
+    .join("\n");
+}
+
 function renderRead2(data) {
   const parts = [];
   parts.push(row("核心信念", data.belief_core || ""));
@@ -449,7 +482,9 @@ async function runRead1(force) {
         draft: data.draft
       };
       state.draft = feed.source === "reference" ? data.draft || null : null;
+      state.uncertain = (feed.source === "reference" && data.draft && Array.isArray(data.draft.uncertain) ? data.draft.uncertain : []).map((q) => ({ q: String(q), ruling: "" }));
       renderRead1(state.read1);
+      renderUncertain();
       state.read2 = {
         position: data.position || "",
         neighbor_diff: data.neighbor_diff || "",
@@ -465,7 +500,9 @@ async function runRead1(force) {
       const data = extractJSON(out.data);
       state.read1 = data;
       state.draft = feed.source === "reference" ? data.draft || null : null;
+      state.uncertain = (feed.source === "reference" && data.draft && Array.isArray(data.draft.uncertain) ? data.draft.uncertain : []).map((q) => ({ q: String(q), ruling: "" }));
       renderRead1(state.read1);
+      renderUncertain();
       setStatus("status-read", out.cached ? "输入没变，用上次结果，未再调用 API。" : "前三遍读完了。去“卡点·信念”确认。", "ok");
       setStep(1, 2);
     }
@@ -542,12 +579,13 @@ async function runCompose(force) {
   }
   const feed = state.feed || feedInputs();
   const samples = state.read1.samples || [];
+  const rulings = collectRulings();
   if (!lockOr("status-black")) return;
   cancelled = false;
   setStatus("status-black", "压成块…");
   $("btn-compose").disabled = true;
   try {
-    const key = hashKey({ name: feed.name, genre: feed.genre, read1: state.read1, read2: state.read2, samples, blacklist: collectBlacklist() });
+    const key = hashKey({ name: feed.name, genre: feed.genre, read1: state.read1, read2: state.read2, samples, blacklist: collectBlacklist(), rulings });
     const out = await cachedRun(
       "compose",
       key,
@@ -560,7 +598,8 @@ async function runCompose(force) {
               read1: state.read1,
               read2: state.read2,
               samples,
-              blacklist: collectBlacklist()
+              blacklist: collectBlacklist(),
+              rulings
             })
           )
         ).trim(),
@@ -611,11 +650,47 @@ async function runRewrite(force) {
   }
 }
 
+async function runRework() {
+  state.block = $("block").value.trim();
+  const passage = $("passage").value.trim();
+  const bad = (state.test.rewrite || $("rewrite").value || "").trim();
+  if (!state.block) {
+    setStatus("status-test", "文风块是空的，先成块。", "error");
+    return;
+  }
+  if (!passage || !bad) {
+    setStatus("status-test", "先跑一次改写再判像不像。", "error");
+    return;
+  }
+  if (!lockOr("status-test")) return;
+  cancelled = false;
+  setStatus("status-test", "不像，回炉重修…");
+  $("verdict-unlike").disabled = true;
+  try {
+    const key = hashKey({ stage: "rework", block: state.block, passage, bad });
+    const out = await cachedRun("rework", key, async () => (await runModel(Prompts.rework({ block: state.block, passage, badRewrite: bad }))).trim(), true);
+    state.block = out.data;
+    $("block").value = state.block;
+    setStatus("status-test", "回炉好了，再拿一段测。", "ok");
+    saveState();
+  } catch (e) {
+    setStatus("status-test", String(e.message || e), "error");
+  } finally {
+    $("verdict-unlike").disabled = false;
+    busy = false;
+  }
+}
+
 function setVerdict(v) {
   state.test.verdict = v;
-  setStatus("status-test", v === "like" ? "像，可以拿走了。" : "不像。点某一层的「重蒸」，只重蒸漂的那层。", v === "like" ? "ok" : "error");
-  if (v === "like") setStep(6, 6);
+  if (v === "like") {
+    setStatus("status-test", "像，可以拿走了。", "ok");
+    setStep(6, 6);
+    saveState();
+    return;
+  }
   saveState();
+  runRework();
 }
 
 function buildJSON() {
@@ -633,6 +708,7 @@ function buildJSON() {
     pool: state.read1 || null,
     read2: state.read2 || null,
     draft: state.draft || null,
+    uncertain: state.uncertain || [],
     test: state.test,
     play: state.play,
     thrifty: !!state.thrifty,
@@ -767,11 +843,12 @@ function restore() {
   $("block").value = state.block || "";
   $("play-mode").value = (state.play && state.play.mode) || "none";
 
-  if (state.feed.source !== "reference") state.draft = null;
+  if (state.feed.source !== "reference") { state.draft = null; state.uncertain = []; }
   if (state.read1) renderRead1(state.read1, false);
   if (state.beliefs && state.beliefs.length) renderBeliefs();
   if (state.read2) renderRead2(state.read2);
   if (state.blacklist && state.blacklist.length) renderBlacklist();
+  renderUncertain();
 
   renderStats();
   applyFab();

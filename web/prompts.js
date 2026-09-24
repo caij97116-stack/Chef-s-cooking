@@ -131,7 +131,7 @@ ${typeof current === "string" ? current : JSON.stringify(current)}
     }
   ];
 
-  const compose = ({ name, genre, read1, read2, samples, blacklist }) => {
+  const compose = ({ name, genre, read1, read2, samples, blacklist, rulings }) => {
     const syntax = read1.syntax || {};
     const object = read1.object || {};
     const attitude = read1.attitude || {};
@@ -161,6 +161,7 @@ ${typeof current === "string" ? current : JSON.stringify(current)}
 - 不出现“技法 / 养成 / 层次 / DNA / 蒸馏”这类词。
 - 不解释、不寒暄、不加前后缀。
 - 反例至少 6 条。
+- 拿不准的地方按用户的决定写。
 - 名字尊重用户给的：${name || "（未给，你来起）"}
 
 【体裁】${label(genre)}
@@ -173,6 +174,8 @@ ${typeof current === "string" ? current : JSON.stringify(current)}
 【历史定位】${read2.position || ""}
 【跟邻居的界】${read2.neighbor_diff || ""}
 【黑名单】${JSON.stringify(blacklist || read2.blacklist || [])}
+【拿不准与你的决定】
+${rulings || "（无）"}
 
 【代表原句（用于拼样本）】
 ${picked || "（无，请写“样本缺失”）"}`
@@ -199,7 +202,35 @@ ${block}
     }
   ];
 
-  return { read1, readAll, read2, refineLayer, compose, rewrite, label, LAYERS };
+  const rework = ({ block, passage, badRewrite }) => [
+    {
+      role: "system",
+      content: "你是大厨烹饪处。你只给修订后的文风块，不解释。"
+    },
+    {
+      role: "user",
+      content: `下面是一份“文风块”，以及用它改写一段默认 AI 腔的结果。用户判定改写得“不像本人”。
+
+【文风块】
+${block}
+
+【默认 AI 腔原文】
+${passage}
+
+【不像的改写】
+${badRewrite}
+
+请先找出漂在哪（句法 / 对象 / 态度 / 修辞 / 信念），然后关键位置收紧，给出修订后的文风块。
+
+要求：
+- 只改文风块，让它更能约束出“像”的结果。
+- 保持原有格式与栏目，反例至少 6 条。
+- 不出现“技法 / 养成 / 层次 / DNA / 蒸馏”这类词。
+- 只输出文风块正文，不要解释、不要前后缀。`
+    }
+  ];
+
+  return { read1, readAll, read2, refineLayer, compose, rewrite, rework, label, LAYERS };
 })();
 
 if (typeof window !== "undefined") window.Prompts = Prompts;

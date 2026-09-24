@@ -19,6 +19,7 @@ const defaultSettings = Object.freeze({
   read2: null,
   blacklist: [],
   draft: null,
+  uncertain: [],
   block: '',
   passage: DEFAULT_PASSAGE,
   rewrite: '',
@@ -126,6 +127,11 @@ const panelTpl = `
       <div id="sd_readout" class="sd-readout"></div>
     </div>
 
+    <div class="sd-sec" id="sd_uncertain_wrap" style="display:none">
+      <div class="sd-sec-title">卡点·拿不准<span class="sd-hint">模型不敢定的，你定夺后再成块</span></div>
+      <div id="sd_uncertain" class="sd-cards"></div>
+    </div>
+
     <div class="sd-sec">
       <div class="sd-sec-title">卡点·信念<span class="sd-hint">选 / 驳 / 修，没有你确认不进下一步</span></div>
       <div id="sd_beliefs" class="sd-cards"></div>
@@ -163,7 +169,7 @@ const panelTpl = `
       <div class="sd-actions">
         <button id="sd_dorewrite" class="menu_button">用文风改写</button>
         <button id="sd_like" class="menu_button">像</button>
-        <button id="sd_unlike" class="menu_button">不像</button>
+        <button id="sd_unlike" class="menu_button" title="判为不像会自动回炉重修文风块">不像（差就差到你满意）</button>
         <span id="sd_status4" class="sd-status"></span>
       </div>
     </div>
@@ -568,6 +574,32 @@ function renderBeliefs() {
   });
 }
 
+function renderUncertain() {
+  const s = settings();
+  const wrap = el('sd_uncertain_wrap');
+  const target = el('sd_uncertain');
+  if (!wrap || !target) return;
+  const list = s.uncertain || [];
+  wrap.style.display = list.length ? '' : 'none';
+  target.innerHTML = list
+    .map(
+      (u, i) =>
+        '<div class="sd-card" data-i="' + i + '">' +
+        '<div class="sd-cardbody">' +
+        '<div class="sd-meta">拿不准：' + esc(u.q) + '</div>' +
+        '<input type="text" class="sd-utext" placeholder="你定：……" value="' + esc(u.ruling || '') + '">' +
+        '</div></div>'
+    )
+    .join('');
+  target.querySelectorAll('.sd-card').forEach((card) => {
+    const i = Number(card.dataset.i);
+    card.querySelector('.sd-utext').addEventListener('input', (e) => {
+      settings().uncertain[i].ruling = e.target.value;
+      save();
+    });
+  });
+}
+
 const BLACKLIST_KINDS = ['手法', '情绪', '用词', '其他'];
 const BLACKLIST_ALIASES = { 手法: '手法', 技巧: '手法', 情绪: '情绪', 情感: '情绪', 用词: '用词', 词汇: '用词', 词: '用词', 其他: '其他' };
 
@@ -651,6 +683,13 @@ function selectedBlacklist() {
   return (settings().blacklist || []).filter((b) => b.on && b.text.trim()).map((b) => b.text.trim());
 }
 
+function selectedRulings() {
+  return (settings().uncertain || [])
+    .filter((u) => u.ruling && u.ruling.trim())
+    .map((u) => '- ' + String(u.q).trim() + ' → ' + u.ruling.trim())
+    .join('\n');
+}
+
 async function runRead1(force) {
   const s = settings();
   s.source = el('sd_source').value;
@@ -698,9 +737,14 @@ async function runRead1(force) {
       counter: b.counter || '',
       on: true
     }));
+    s.uncertain = (s.source === 'reference' && data.draft && Array.isArray(data.draft.uncertain) ? data.draft.uncertain : []).map((q) => ({
+      q: String(q),
+      ruling: ''
+    }));
     const shownDraft = s.source === 'reference' ? s.draft : null;
     renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: shownDraft }));
     renderBeliefs();
+    renderUncertain();
     if (thrifty) {
       s.read2 = {
         position: data.position || '',
@@ -798,7 +842,8 @@ async function runCompose(force) {
   el('sd_compose').disabled = true;
   try {
     const samples = s.read1.samples || [];
-    const key = hashKey({ name: s.name, genre: s.genre, read1: s.read1, read2: s.read2, samples, blacklist: selectedBlacklist() });
+    const rulings = selectedRulings();
+    const key = hashKey({ name: s.name, genre: s.genre, read1: s.read1, read2: s.read2, samples, blacklist: selectedBlacklist(), rulings });
     const { data, cached } = await cachedRun(
       'compose',
       key,
@@ -811,7 +856,8 @@ async function runCompose(force) {
               read1: s.read1,
               read2: s.read2,
               samples,
-              blacklist: selectedBlacklist()
+              blacklist: selectedBlacklist(),
+              rulings
             })
           )
         ).trim(),
@@ -866,6 +912,43 @@ async function runRewrite(force) {
   }
 }
 
+async function runRework(force) {
+  const s = settings();
+  s.block = el('sd_block').value.trim();
+  const passage = el('sd_passage').value.trim();
+  const bad = (s.rewrite || el('sd_rewrite').value || '').trim();
+  if (!s.block) {
+    setStatus('sd_status4', '文风块是空的，先成块。', 'error');
+    return;
+  }
+  if (!passage || !bad) {
+    setStatus('sd_status4', '先跑一次改写再判像不像。', 'error');
+    return;
+  }
+  if (!lockOr('sd_status4')) return;
+  cancelled = false;
+  setStatus('sd_status4', '不像，回炉重修…');
+  el('sd_unlike').disabled = true;
+  try {
+    const key = hashKey({ stage: 'rework', block: s.block, passage, bad });
+    const { data } = await cachedRun(
+      'rework',
+      key,
+      async () => (await callModel(Prompts.rework({ block: s.block, passage, badRewrite: bad }))).trim(),
+      true
+    );
+    s.block = data;
+    el('sd_block').value = s.block;
+    setStatus('sd_status4', '回炉好了，再拿一段测。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_status4', String(e.message || e), 'error');
+  } finally {
+    el('sd_unlike').disabled = false;
+    busy = false;
+  }
+}
+
 function slug() {
   const n = (settings().name || '文风').trim();
   return n.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || '文风';
@@ -896,6 +979,7 @@ function buildJSON() {
     pool: s.read1 || null,
     read2: s.read2 || null,
     draft: s.draft || null,
+    uncertain: s.uncertain || [],
     test: { passage: s.passage, rewrite: s.rewrite, verdict: s.verdict },
     play: { mode: s.playMode },
     thrifty: !!s.thrifty,
@@ -981,6 +1065,7 @@ function restoreLayer() {
   if (s.beliefs && s.beliefs.length) renderBeliefs();
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
+  renderUncertain();
   renderStats();
 }
 
@@ -1114,8 +1199,8 @@ function bindLayer() {
   });
   el('sd_unlike').addEventListener('click', () => {
     settings().verdict = 'unlike';
-    setStatus('sd_status4', '不像。点某一层的「重蒸」，只重蒸漂的那层。', 'error');
     save();
+    runRework();
   });
 
   el('sd_copy').addEventListener('click', async () => {
