@@ -5,6 +5,10 @@ const DEFAULT_PASSAGE =
   '在这个快节奏的时代，我们常常被生活的洪流裹挟着前行。值得注意的是，真正的成长往往发生在那些不经意的瞬间。不禁让人感叹，时间的流逝是如此悄无声息。阳光透过窗户洒进来，宛如一层薄纱，映入眼帘的，是一抹淡淡的温暖。';
 
 const defaultSettings = Object.freeze({
+  mode: 'st',
+  baseUrl: '',
+  apiKey: '',
+  model: '',
   source: 'mine',
   genre: 'narration',
   name: '',
@@ -24,11 +28,37 @@ const defaultSettings = Object.freeze({
 const tpl = `
 <div class="sd-root inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>花园厨房 · 文风蒸馏</b>
+    <b>大厨烹饪处 · 文风蒸馏</b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
-    <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。用当前已连接的模型生成。</div>
+    <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
+
+    <div class="sd-sec">
+      <div class="sd-sec-title">生成方式</div>
+      <label class="sd-field"><span>用哪个模型</span>
+        <select id="sd_mode">
+          <option value="st">当前酒馆连接的模型</option>
+          <option value="custom">自定义站子 / 模型</option>
+        </select>
+      </label>
+      <div id="sd_modecustom">
+        <label class="sd-field"><span>Base URL</span>
+          <input id="sd_baseurl" type="text" placeholder="https://api.example.com/v1">
+        </label>
+        <label class="sd-field"><span>API Key</span>
+          <input id="sd_apikey" type="password" placeholder="sk-...">
+        </label>
+        <label class="sd-field"><span>模型</span>
+          <div class="sd-inline">
+            <input id="sd_model" type="text" list="sd_modellist" placeholder="deepseek-chat">
+            <datalist id="sd_modellist"></datalist>
+            <button id="sd_pull" class="menu_button">拉取模型</button>
+          </div>
+        </label>
+        <div class="sd-actions"><span id="sd_status0" class="sd-status"></span></div>
+      </div>
+    </div>
 
     <div class="sd-grid2">
       <label class="sd-field"><span>来源</span>
@@ -167,7 +197,7 @@ function toast(kind, text) {
   else console.log('[style-distiller]', text);
 }
 
-async function generate(messages) {
+async function generateRawViaST(messages) {
   const { generateRaw } = ctx();
   if (typeof generateRaw !== 'function') {
     throw new Error('当前 SillyTavern 不支持 generateRaw，请升级或检查 API 连接');
@@ -181,6 +211,65 @@ async function generate(messages) {
     .map((m) => ({ role: m.role, content: m.content }));
   const result = await generateRaw({ systemPrompt, prompt });
   return String(result == null ? '' : result);
+}
+
+async function generateViaCustom(messages) {
+  const s = settings();
+  if (!s.baseUrl || !s.apiKey || !s.model) {
+    throw new Error('先填好自定义站子的 Base URL / Key / 模型');
+  }
+  const url = s.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.apiKey },
+    body: JSON.stringify({ model: s.model, messages, temperature: 0.7 })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error('HTTP ' + res.status + ' · ' + t.slice(0, 180));
+  }
+  const data = await res.json();
+  const msg = data.choices && data.choices[0] && data.choices[0].message;
+  return (msg && msg.content) || '';
+}
+
+async function generate(messages) {
+  return settings().mode === 'custom' ? generateViaCustom(messages) : generateRawViaST(messages);
+}
+
+async function pullModels() {
+  const s = settings();
+  s.baseUrl = el('sd_baseurl').value.trim();
+  s.apiKey = el('sd_apikey').value.trim();
+  save();
+  if (!s.baseUrl) {
+    setStatus('sd_status0', '先填 Base URL。', 'error');
+    return;
+  }
+  setStatus('sd_status0', '拉取中…');
+  el('sd_pull').disabled = true;
+  try {
+    const url = s.baseUrl.replace(/\/+$/, '') + '/models';
+    const res = await fetch(url, { headers: s.apiKey ? { Authorization: 'Bearer ' + s.apiKey } : {} });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const list = (data.data || data.models || [])
+      .map((m) => m.id || m.name || m.model)
+      .filter(Boolean);
+    if (!list.length) throw new Error('没拿到模型列表');
+    el('sd_modellist').innerHTML = list.map((id) => '<option value="' + esc(id) + '"></option>').join('');
+    setStatus('sd_status0', '拉到 ' + list.length + ' 个模型，点模型框选。', 'ok');
+  } catch (e) {
+    setStatus('sd_status0', String(e.message || e), 'error');
+  } finally {
+    el('sd_pull').disabled = false;
+  }
+}
+
+function updateMode() {
+  const s = settings();
+  el('sd_mode').value = s.mode;
+  el('sd_modecustom').style.display = s.mode === 'custom' ? '' : 'none';
 }
 
 function parseJSON(text) {
@@ -443,6 +532,10 @@ function buildJSON() {
 
 function restore() {
   const s = settings();
+  el('sd_baseurl').value = s.baseUrl || '';
+  el('sd_apikey').value = s.apiKey || '';
+  el('sd_model').value = s.model || '';
+  updateMode();
   el('sd_source').value = s.source;
   el('sd_genre').value = s.genre;
   el('sd_name').value = s.name;
@@ -462,6 +555,12 @@ function bind() {
   el('sd_read2').addEventListener('click', runRead2);
   el('sd_compose').addEventListener('click', runCompose);
   el('sd_dorewrite').addEventListener('click', runRewrite);
+
+  el('sd_mode').addEventListener('change', (e) => { settings().mode = e.target.value; save(); updateMode(); });
+  el('sd_baseurl').addEventListener('input', (e) => { settings().baseUrl = e.target.value.trim(); save(); });
+  el('sd_apikey').addEventListener('input', (e) => { settings().apiKey = e.target.value.trim(); save(); });
+  el('sd_model').addEventListener('input', (e) => { settings().model = e.target.value.trim(); save(); });
+  el('sd_pull').addEventListener('click', pullModels);
 
   el('sd_source').addEventListener('change', (e) => { settings().source = e.target.value; save(); });
   el('sd_genre').addEventListener('change', (e) => { settings().genre = e.target.value; save(); });
