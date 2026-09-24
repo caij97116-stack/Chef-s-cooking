@@ -24,11 +24,11 @@ const defaultSettings = Object.freeze({
 const tpl = `
 <div class="sd-root inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>文风蒸馏器</b>
+    <b>花园厨房 · 文风蒸馏</b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
-    <div class="sd-note">语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。用当前已连接的模型生成。</div>
+    <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。用当前已连接的模型生成。</div>
 
     <div class="sd-grid2">
       <label class="sd-field"><span>来源</span>

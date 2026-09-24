@@ -1,6 +1,6 @@
-# 文风蒸馏器 · SillyTavern 扩展
+# 花园厨房 · 文风蒸馏 · SillyTavern 扩展
 
-把语料蒸馏成一段可以直接用的**文风块**。文风块能填进预设的一条 prompt，也能填进世界书的一条 entry——填哪里由你决定，本扩展不生成容器，也不碰 keys、position、order。
+采料、慢炖、出锅：把语料熬成一段可以直接用的**文风块**。文风块能填进预设的一条 prompt，也能填进世界书的一条 entry——填哪里由你决定，本扩展不生成容器，也不碰 keys、position、order。
 
 生成使用你当前在 SillyTavern 里已连接的模型，不需要单独配 API Key。
 
