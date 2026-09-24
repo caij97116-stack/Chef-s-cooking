@@ -1273,7 +1273,9 @@ function applyPanel() {
   p.style.left = '50%';
   p.style.right = 'auto';
   p.style.top = '56px';
-  p.style.bottom = '112px';
+  p.style.bottom = 'auto';
+  p.style.height = 'auto';
+  p.style.maxHeight = 'calc(100vh - 56px - 112px)';
   p.style.transform = 'translateX(-50%)';
   p.style.zIndex = '2147483647';
   if (b) b.style.display = 'block';

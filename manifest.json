@@ -7,7 +7,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "caij97116-stack",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "homePage": "https://github.com/caij97116-stack/Chef-s-cooking",
   "auto_update": false,
   "minimum_client_version": "1.16.0",
