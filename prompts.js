@@ -11,7 +11,7 @@ export function read1({ corpus, genre }) {
   return [
     {
       role: "system",
-      content: "你是文风蒸馏器。你只做分析、不下最终结论，并且只输出 JSON。"
+      content: "你是大厨烹饪处。你只做分析、不下最终结论，并且只输出 JSON。"
     },
     {
       role: "user",
@@ -45,7 +45,7 @@ export function read2({ corpus, genre, beliefs }) {
   return [
     {
       role: "system",
-      content: "你是文风蒸馏器。你只输出 JSON。"
+      content: "你是大厨烹饪处。你只输出 JSON。"
     },
     {
       role: "user",
@@ -72,7 +72,7 @@ export function draftReference({ corpus, genre }) {
   return [
     {
       role: "system",
-      content: "你是文风蒸馏器。你只输出 JSON。"
+      content: "你是大厨烹饪处。你只输出 JSON。"
     },
     {
       role: "user",
@@ -98,7 +98,7 @@ export function compose({ name, genre, read1, read2, corpus, blacklist }) {
   return [
     {
       role: "system",
-      content: "你是文风蒸馏器。你直接给成品，不解释。"
+      content: "你是大厨烹饪处。你直接给成品，不解释。"
     },
     {
       role: "user",
@@ -143,7 +143,7 @@ export function rewrite({ block, passage }) {
   return [
     {
       role: "system",
-      content: "你是文风蒸馏器。"
+      content: "你是大厨烹饪处。"
     },
     {
       role: "user",
