@@ -222,7 +222,14 @@ const panelTpl = `
 </div>`;
 
 function ctx() {
-  return SillyTavern.getContext();
+  // 1.16+：优先官方入口；兼容部分打包/代理环境
+  if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
+    return SillyTavern.getContext();
+  }
+  if (typeof window !== 'undefined' && window.SillyTavern && typeof window.SillyTavern.getContext === 'function') {
+    return window.SillyTavern.getContext();
+  }
+  throw new Error('SillyTavern.getContext 不可用，请确认酒馆版本 ≥ 1.16 且扩展已启用');
 }
 
 function settings() {
@@ -1994,26 +2001,58 @@ function addUI() {
   }
 }
 
+function bindAppEvents() {
+  try {
+    const c = ctx();
+    const es = c.eventSource;
+    // 1.16+ 同时存在 event_types / eventTypes
+    const et = c.event_types || c.eventTypes || {};
+    if (!es || typeof es.on !== 'function') return false;
+    const ready = et.APP_READY || 'app_ready';
+    const inited = et.APP_INITIALIZED || 'app_initialized';
+    const firstLoad = et.EXTENSIONS_FIRST_LOAD || 'extensions_first_load';
+    es.on(ready, addUI);
+    if (inited) es.on(inited, addUI);
+    if (firstLoad) es.on(firstLoad, addUI);
+    return true;
+  } catch (e) {
+    console.warn('[大厨烹饪处] 事件挂钩失败，改用轮询', e);
+    return false;
+  }
+}
+
 function startBootstrap() {
   if (hooked) {
     addUI();
     return;
   }
   hooked = true;
+  console.log('[大厨烹饪处] bootstrap 开始', {
+    readyState: typeof document !== 'undefined' ? document.readyState : 'n/a',
+    hasST: typeof SillyTavern !== 'undefined',
+    ua: typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  });
   try {
     migrateKey();
   } catch (e) {
     console.error('[大厨烹饪处] 迁移 Key 失败', e);
   }
-  try {
-    const { eventSource, event_types } = ctx();
-    eventSource.on(event_types.APP_READY, addUI);
-    if (event_types.APP_INITIALIZED) eventSource.on(event_types.APP_INITIALIZED, addUI);
-  } catch (e) {
-    console.error('[style-distiller] 事件挂钩失败，改用轮询', e);
-  }
+  bindAppEvents();
   addUI();
   if (!bootTimer) bootTimer = setInterval(addUI, 400);
+  // 保险：3 秒后再强制挂一次球（覆盖 1.16~1.18 加载时序差异）
+  setTimeout(() => {
+    try {
+      if (!el('sd_fab')) {
+        layerMounted = false;
+        layerBound = false;
+      }
+      mountLayer();
+      applyFab();
+    } catch (e) {
+      console.warn('[大厨烹饪处] 延迟挂载失败', e);
+    }
+  }, 3000);
 }
 
 export function onActivate() {
@@ -2027,7 +2066,6 @@ export function onEnable() {
     const s = settings();
     if (s.showFab == null) s.showFab = true;
   } catch (e) {}
-  // 允许重新挂载
   if (!el('sd_fab')) {
     layerMounted = false;
     layerBound = false;
@@ -2054,9 +2092,30 @@ export function onDisable() {
   if (layer) layer.style.display = 'none';
 }
 
+// 兼容 1.16+：扩展脚本往往在 DOMContentLoaded 之后才注入，
+// 只监听 DOMContentLoaded 永远不会触发；必须立刻/在 ready 时启动。
+function scheduleBootstrap() {
+  try {
+    startBootstrap();
+  } catch (e) {
+    console.error('[大厨烹饪处] 首次 bootstrap 失败，将重试', e);
+    setTimeout(() => {
+      try { startBootstrap(); } catch (e2) {
+        console.error('[大厨烹饪处] bootstrap 重试仍失败', e2);
+      }
+    }, 500);
+  }
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scheduleBootstrap);
+  } else {
+    // 已经 interactive / complete：立刻挂（1.16/1.17/1.18 常见路径）
+    scheduleBootstrap();
+  }
+}
 if (typeof jQuery !== 'undefined') {
-  jQuery(() => startBootstrap());
-} else if (typeof document !== 'undefined') {
-  document.addEventListener('DOMContentLoaded', startBootstrap);
+  jQuery(scheduleBootstrap);
 }
 
