@@ -45,10 +45,10 @@ const settingsTpl = `
   </div>
 </div>`;
 
-const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处"><i class="fa-solid fa-utensils"></i></div>`;
+const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处" style="position:fixed;right:18px;bottom:120px;width:54px;height:54px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;cursor:grab;z-index:2147483001;color:#1b1e24;background:#c8a45c;box-shadow:0 6px 20px rgba(0,0,0,.45);"><i class="fa-solid fa-utensils"></i></div>`;
 
 const panelTpl = `
-<div class="sd-panel" id="sd_panel">
+<div class="sd-panel" id="sd_panel" style="position:fixed;z-index:2147483001;width:min(420px,92vw);max-height:82vh;display:none;flex-direction:column;overflow:hidden;border-radius:14px;color:#eeeeee;background:#1b1e24;border:1px solid rgba(255,255,255,.18);box-shadow:0 12px 40px rgba(0,0,0,.45);">
   <div class="sd-panel-head" id="sd_panel_head">
     <span>大厨烹饪处 <span class="sd-stat" id="sd_stats">已调用 0 次</span></span>
     <span class="sd-head-right">
@@ -746,7 +746,7 @@ function applyLayer() {
   layer.style.display = s.showFab || s.panelOpen ? '' : 'none';
 }
 
-function restore() {
+function restoreLayer() {
   const s = settings();
   el('sd_baseurl').value = s.baseUrl || '';
   el('sd_apikey').value = s.apiKey || '';
@@ -762,11 +762,16 @@ function restore() {
   el('sd_rewrite').value = s.rewrite || '';
   el('sd_block').value = s.block || '';
   el('sd_play').value = s.playMode || 'none';
-  el('sd_showfab').checked = !!s.showFab;
   if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
   if (s.beliefs && s.beliefs.length) renderBeliefs();
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
+  renderStats();
+}
+
+function restoreSettings() {
+  const s = settings();
+  if (el('sd_showfab')) el('sd_showfab').checked = !!s.showFab;
   renderStats();
 }
 
@@ -839,7 +844,7 @@ function forceFromEvent(e) {
   return !!(e && e.shiftKey);
 }
 
-function bind() {
+function bindLayer() {
   el('sd_read1').addEventListener('click', (e) => runRead1(forceFromEvent(e)));
   el('sd_read2').addEventListener('click', (e) => runRead2(forceFromEvent(e)));
   el('sd_compose').addEventListener('click', (e) => runCompose(forceFromEvent(e)));
@@ -904,12 +909,6 @@ function bind() {
     setStatus('sd_status5', 'JSON 已下载。', 'ok');
   });
 
-  el('sd_showfab').addEventListener('change', (e) => {
-    settings().showFab = e.target.checked;
-    save();
-    applyFab();
-    applyLayer();
-  });
   el('sd_panel_close').addEventListener('click', () => {
     settings().panelOpen = false;
     save();
@@ -930,46 +929,111 @@ function bind() {
   });
 }
 
-let mounted = false;
-let appReadyHooked = false;
-
-function hookAppReady() {
-  if (appReadyHooked) return;
-  appReadyHooked = true;
-  const { eventSource, event_types } = ctx();
-  eventSource.on(event_types.APP_READY, addUI);
+function bindSettings() {
+  const node = el('sd_showfab');
+  if (!node) return;
+  node.addEventListener('change', (e) => {
+    settings().showFab = e.target.checked;
+    save();
+    applyFab();
+    applyPanel();
+    applyLayer();
+  });
 }
 
-function addUI() {
-  const host = document.getElementById('extensions_settings2');
-  if (!host) {
-    setTimeout(addUI, 500);
-    return;
-  }
-  if (!el('sd_root')) host.insertAdjacentHTML('beforeend', settingsTpl);
+let layerMounted = false;
+let settingsMounted = false;
+let hooked = false;
+let bootTimer = null;
+let bootTries = 0;
+
+function mountLayer() {
+  if (layerMounted) return true;
+  if (!document.body) return false;
   if (!el('sd_layer')) {
     const layer = document.createElement('div');
     layer.id = 'sd_layer';
     layer.className = 'sd-layer';
+    layer.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
     layer.innerHTML = fabTpl + panelTpl;
     document.body.appendChild(layer);
   }
-  if (mounted) return;
-  mounted = true;
-  restore();
-  bind();
+  layerMounted = true;
+  restoreLayer();
+  bindLayer();
   applyFab();
   applyPanel();
   applyLayer();
+  console.log('[大厨烹饪处] 悬浮球已挂载');
+  return true;
+}
+
+function settingsHost() {
+  return (
+    document.getElementById('extensions_settings2') ||
+    document.getElementById('extensions_settings') ||
+    null
+  );
+}
+
+function mountSettings() {
+  if (settingsMounted) return true;
+  if (!el('sd_root')) {
+    const host = settingsHost();
+    if (!host) return false;
+    host.insertAdjacentHTML('beforeend', settingsTpl);
+  }
+  settingsMounted = true;
+  restoreSettings();
+  bindSettings();
+  return true;
+}
+
+function addUI() {
+  try {
+    mountLayer();
+  } catch (e) {
+    console.error('[style-distiller] 挂载悬浮球失败', e);
+  }
+  try {
+    mountSettings();
+  } catch (e) {
+    console.error('[style-distiller] 挂载设置项失败', e);
+  }
+  bootTries += 1;
+  if ((layerMounted && settingsMounted) || bootTries > 150) {
+    if (bootTimer) {
+      clearInterval(bootTimer);
+      bootTimer = null;
+    }
+  }
+}
+
+function startBootstrap() {
+  if (hooked) {
+    addUI();
+    return;
+  }
+  hooked = true;
+  try {
+    const { eventSource, event_types } = ctx();
+    eventSource.on(event_types.APP_READY, addUI);
+    if (event_types.APP_INITIALIZED) eventSource.on(event_types.APP_INITIALIZED, addUI);
+  } catch (e) {
+    console.error('[style-distiller] 事件挂钩失败，改用轮询', e);
+  }
+  addUI();
+  if (!bootTimer) bootTimer = setInterval(addUI, 400);
 }
 
 export function onActivate() {
-  hookAppReady();
+  startBootstrap();
 }
 
 export function onEnable() {
   const root = el('sd_root');
   if (root) root.style.display = '';
+  startBootstrap();
   applyFab();
   applyPanel();
   applyLayer();
@@ -982,10 +1046,9 @@ export function onDisable() {
   if (layer) layer.style.display = 'none';
 }
 
-jQuery(() => {
-  try {
-    if (typeof SillyTavern !== 'undefined') hookAppReady();
-  } catch (e) {
-    console.error('[style-distiller] init failed', e);
-  }
-});
+if (typeof jQuery !== 'undefined') {
+  jQuery(() => startBootstrap());
+} else if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', startBootstrap);
+}
+
