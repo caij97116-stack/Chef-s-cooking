@@ -8,6 +8,7 @@ const defaultSettings = Object.freeze({
   mode: 'st',
   baseUrl: '',
   rememberKey: true,
+  stream: false,
   model: '',
   temperature: 0.7,
   source: 'mine',
@@ -77,6 +78,7 @@ const panelTpl = `
           <input id="sd_apikey" type="password" placeholder="sk-...">
         </label>
         <label class="sd-check"><input id="sd_rememberkey" type="checkbox"> <span>记住 Key（存在本机；关掉则只在本次会话有效）</span></label>
+        <label class="sd-check"><input id="sd_stream" type="checkbox"> <span>流式输出（只对自定义站子生效；边收边显示）</span></label>
         <label class="sd-field"><span>模型</span>
           <div class="sd-inline">
             <input id="sd_model" type="text" list="sd_modellist" placeholder="deepseek-chat">
@@ -424,6 +426,62 @@ async function generateViaCustom(messages, signal) {
   return (msg && msg.content) || '';
 }
 
+async function generateViaCustomStream(messages, signal, onDelta) {
+  const s = settings();
+  const key = getApiKey();
+  if (!s.baseUrl || !key || !s.model) {
+    throw new Error('先填好自定义站子的 Base URL / Key / 模型');
+  }
+  const url = s.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+    body: JSON.stringify({ model: s.model, messages, temperature: Number(s.temperature) || 0.7, stream: true, stream_options: { include_usage: true } }),
+    signal
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error('HTTP ' + res.status + ' · ' + t.slice(0, 180));
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    return generateViaCustom(messages, signal);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let out = '';
+  let tokens = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      const payload = t.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let obj = null;
+      try {
+        obj = JSON.parse(payload);
+      } catch (e) {
+        continue;
+      }
+      const delta = obj.choices && obj.choices[0] && obj.choices[0].delta ? obj.choices[0].delta.content : '';
+      if (delta) {
+        out += delta;
+        if (onDelta) onDelta(out);
+      }
+      if (obj.usage && (obj.usage.total_tokens || obj.usage.totalTokenCount)) {
+        tokens = obj.usage.total_tokens || obj.usage.totalTokenCount;
+      }
+    }
+  }
+  if (tokens) settings().stats.tokens += Number(tokens) || 0;
+  return out;
+}
+
 let activeController = null;
 let cancelled = false;
 let busy = false;
@@ -437,12 +495,23 @@ function lockOr(statusId) {
   return true;
 }
 
-async function callModel(messages) {
+async function callModel(messages, onDelta) {
   if (cancelled) throw new Error('已停止');
   if (settings().mode === 'custom') {
     activeController = new AbortController();
     try {
-      const out = await generateViaCustom(messages, activeController.signal);
+      let out;
+      if (settings().stream && typeof onDelta === 'function') {
+        try {
+          out = await generateViaCustomStream(messages, activeController.signal, onDelta);
+        } catch (e) {
+          if (cancelled) throw e;
+          if (typeof onDelta === 'function') onDelta('');
+          out = await generateViaCustom(messages, activeController.signal);
+        }
+      } else {
+        out = await generateViaCustom(messages, activeController.signal);
+      }
       bumpStats();
       return out;
     } finally {
@@ -884,7 +953,10 @@ async function runCompose(force) {
               samples,
               blacklist: selectedBlacklist(),
               rulings
-            })
+            }),
+            (chunk) => {
+              el('sd_block').value = chunk;
+            }
           )
         ).trim(),
       force
@@ -922,7 +994,12 @@ async function runRewrite(force) {
     const { data, cached } = await cachedRun(
       'rewrite',
       key,
-      async () => (await callModel(Prompts.rewrite({ block: s.block, passage }))).trim(),
+      async () =>
+        (
+          await callModel(Prompts.rewrite({ block: s.block, passage }), (chunk) => {
+            el('sd_rewrite').value = chunk;
+          })
+        ).trim(),
       force
     );
     s.passage = passage;
@@ -960,7 +1037,12 @@ async function runRework(force) {
     const { data } = await cachedRun(
       'rework',
       key,
-      async () => (await callModel(Prompts.rework({ block: s.block, passage, badRewrite: bad }))).trim(),
+      async () =>
+        (
+          await callModel(Prompts.rework({ block: s.block, passage, badRewrite: bad }), (chunk) => {
+            el('sd_block').value = chunk;
+          })
+        ).trim(),
       true
     );
     s.block = data;
@@ -1228,6 +1310,7 @@ function restoreLayer() {
   el('sd_baseurl').value = s.baseUrl || '';
   el('sd_apikey').value = getApiKey();
   el('sd_rememberkey').checked = !!s.rememberKey;
+  el('sd_stream').checked = !!s.stream;
   el('sd_model').value = s.model || '';
   el('sd_temp').value = s.temperature != null ? s.temperature : 0.7;
   el('sd_tempval').textContent = String(el('sd_temp').value);
@@ -1350,6 +1433,7 @@ function bindLayer() {
     save();
   });
   el('sd_model').addEventListener('input', (e) => { settings().model = e.target.value.trim(); save(); });
+  el('sd_stream').addEventListener('change', (e) => { settings().stream = e.target.checked; save(); });
   el('sd_temp').addEventListener('input', (e) => {
     settings().temperature = Number(e.target.value);
     el('sd_tempval').textContent = String(e.target.value);

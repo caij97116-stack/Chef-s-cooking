@@ -22,6 +22,7 @@ const state = {
   test: { passage: DEFAULT_PASSAGE, rewrite: "", verdict: "" },
   play: { mode: "none" },
   thrifty: true,
+  stream: false,
   styles: [],
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 },
@@ -202,10 +203,78 @@ async function callLLM(messages, signal) {
   return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "";
 }
 
-async function runModel(messages) {
+async function callLLMStream(messages, signal, onDelta) {
+  const { baseUrl, apiKey, model, temperature } = state.config;
+  if (!baseUrl || !apiKey || !model) throw new Error("先在“API 设置”里填好 Base URL / Key / 模型");
+  const url = baseUrl.replace(/\/+$/, "") + "/chat/completions";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey
+    },
+    body: JSON.stringify({ model, messages, temperature: Number(temperature) || 0.7, stream: true, stream_options: { include_usage: true } }),
+    signal
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + " · " + t.slice(0, 180));
+  }
+  if (!res.body || typeof res.body.getReader !== "function") {
+    return callLLM(messages, signal);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let out = "";
+  let tokens = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith("data:")) continue;
+      const payload = t.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let obj = null;
+      try {
+        obj = JSON.parse(payload);
+      } catch (e) {
+        continue;
+      }
+      const delta = obj.choices && obj.choices[0] && obj.choices[0].delta ? obj.choices[0].delta.content : "";
+      if (delta) {
+        out += delta;
+        if (onDelta) onDelta(out);
+      }
+      if (obj.usage && (obj.usage.total_tokens || obj.usage.totalTokenCount)) {
+        tokens = obj.usage.total_tokens || obj.usage.totalTokenCount;
+      }
+    }
+  }
+  state.stats.calls += 1;
+  if (tokens) state.stats.tokens += Number(tokens) || 0;
+  renderStats();
+  saveState();
+  return out;
+}
+
+async function runModel(messages, onDelta) {
   if (cancelled) throw new Error("已停止");
   activeController = new AbortController();
   try {
+    if (state.stream && typeof onDelta === "function") {
+      try {
+        return await callLLMStream(messages, activeController.signal, onDelta);
+      } catch (e) {
+        if (cancelled) throw e;
+        onDelta("");
+        return await callLLM(messages, activeController.signal);
+      }
+    }
     return await callLLM(messages, activeController.signal);
   } finally {
     activeController = null;
@@ -601,7 +670,10 @@ async function runCompose(force) {
               samples,
               blacklist: collectBlacklist(),
               rulings
-            })
+            }),
+            (chunk) => {
+              $("block").value = chunk;
+            }
           )
         ).trim(),
       force
@@ -636,7 +708,7 @@ async function runRewrite(force) {
   $("btn-rewrite").disabled = true;
   try {
     const key = hashKey({ block: state.block, passage });
-    const out = await cachedRun("rewrite", key, async () => (await runModel(Prompts.rewrite({ block: state.block, passage }))).trim(), force);
+    const out = await cachedRun("rewrite", key, async () => (await runModel(Prompts.rewrite({ block: state.block, passage }), (chunk) => { $("rewrite").value = chunk; })).trim(), force);
     state.test.passage = passage;
     state.test.rewrite = out.data;
     $("rewrite").value = state.test.rewrite;
@@ -669,7 +741,7 @@ async function runRework() {
   $("verdict-unlike").disabled = true;
   try {
     const key = hashKey({ stage: "rework", block: state.block, passage, bad });
-    const out = await cachedRun("rework", key, async () => (await runModel(Prompts.rework({ block: state.block, passage, badRewrite: bad }))).trim(), true);
+    const out = await cachedRun("rework", key, async () => (await runModel(Prompts.rework({ block: state.block, passage, badRewrite: bad }), (chunk) => { $("block").value = chunk; })).trim(), true);
     state.block = out.data;
     $("block").value = state.block;
     setStatus("status-test", "回炉好了，再拿一段测。", "ok");
@@ -956,6 +1028,7 @@ function restore() {
   $("baseUrl").value = state.config.baseUrl || "";
   $("apiKey").value = state.config.apiKey || "";
   $("rememberKey").checked = state.rememberKey !== false;
+  $("stream").checked = state.stream === true;
   $("model").value = state.config.model || "";
   $("temperature").value = state.config.temperature != null ? state.config.temperature : 0.7;
   $("tempval").textContent = String($("temperature").value);
@@ -998,6 +1071,10 @@ function bind() {
   });
   $("rememberKey").addEventListener("change", () => {
     saveConfig();
+  });
+  $("stream").addEventListener("change", () => {
+    state.stream = $("stream").checked;
+    saveState();
   });
 
   $("btn-read").addEventListener("click", () => runRead1(false));
