@@ -48,10 +48,10 @@ const settingsTpl = `
 
 const menuItemTpl = `<div id="sd_menuitem" class="list-group-item flex-container flexGap5 interactable" tabindex="0" role="button" title="大厨烹饪处"><div class="fa-solid fa-utensils extensionsMenuExtensionButton" aria-hidden="true"></div><span>大厨烹饪处</span></div>`;
 
-const backdropTpl = `<div id="sd_backdrop" style="position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.5);display:none;"></div>`;
+const backdropTpl = `<div id="sd_backdrop"></div>`;
 
 const panelTpl = `
-<div class="sd-panel" id="sd_panel" style="position:fixed;z-index:2147483647;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);max-height:86vh;display:none;flex-direction:column;overflow:hidden;border-radius:14px;color:#eeeeee;background:#1b1e24;border:1px solid rgba(255,255,255,.18);box-shadow:0 12px 40px rgba(0,0,0,.45);">
+<div class="sd-panel" id="sd_panel">
   <div class="sd-panel-head" id="sd_panel_head">
     <span>大厨烹饪处 <span class="sd-stat" id="sd_stats">已调用 0 次</span></span>
     <span class="sd-head-right">
@@ -1266,9 +1266,6 @@ function applyPanel() {
     return;
   }
   p.style.display = 'flex';
-  p.style.left = '50%';
-  p.style.top = '50%';
-  p.style.transform = 'translate(-50%,-50%)';
   if (b) b.style.display = 'block';
 }
 
