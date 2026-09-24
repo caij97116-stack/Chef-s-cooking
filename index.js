@@ -27,6 +27,7 @@ const defaultSettings = Object.freeze({
   playMode: 'none',
   thrifty: true,
   showFab: true,
+  styles: [],
   fabPos: null,
   panelPos: null,
   panelOpen: false,
@@ -184,6 +185,17 @@ const panelTpl = `
           <option value="actor">全权代演（AI 完整扮演 {{user}}）</option>
         </select>
       </label>
+      <div class="sd-inline">
+        <input id="sd_stylename" type="text" placeholder="存档名（默认用文风名）">
+        <button id="sd_stylesave" class="menu_button">存为存档</button>
+      </div>
+      <div class="sd-inline">
+        <select id="sd_stylelist"></select>
+        <button id="sd_styleload" class="menu_button">载入</button>
+        <button id="sd_styleover" class="menu_button">覆盖</button>
+        <button id="sd_styledel" class="menu_button">删除</button>
+      </div>
+      <div id="sd_stylestatus" class="sd-status"></div>
       <div class="sd-actions">
         <button id="sd_copy" class="menu_button">复制文风块</button>
         <button id="sd_dljson" class="menu_button">下载 JSON</button>
@@ -987,6 +999,69 @@ function buildJSON() {
   };
 }
 
+const STYLE_LIMIT = 50;
+
+function styleLabel(it) {
+  const d = new Date(it.savedAt || Date.now());
+  const pad = (n) => String(n).padStart(2, '0');
+  return it.name + '（' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + '）';
+}
+
+function currentSnapshot() {
+  const s = settings();
+  return {
+    name: s.name,
+    source: s.source,
+    genre: s.genre,
+    read1: s.read1,
+    beliefs: s.beliefs,
+    read2: s.read2,
+    blacklist: s.blacklist,
+    draft: s.draft,
+    uncertain: s.uncertain,
+    block: el('sd_block').value,
+    passage: s.passage,
+    rewrite: s.rewrite,
+    verdict: s.verdict,
+    playMode: s.playMode
+  };
+}
+
+function applySnapshot(data) {
+  const s = settings();
+  s.name = data.name || '';
+  s.source = data.source || 'mine';
+  s.genre = data.genre || 'narration';
+  s.read1 = data.read1 || null;
+  s.beliefs = data.beliefs || [];
+  s.read2 = data.read2 || null;
+  s.blacklist = data.blacklist || [];
+  s.draft = data.draft || null;
+  s.uncertain = data.uncertain || [];
+  s.block = data.block || '';
+  s.passage = data.passage || DEFAULT_PASSAGE;
+  s.rewrite = data.rewrite || '';
+  s.verdict = data.verdict || '';
+  s.playMode = data.playMode || 'none';
+  restoreLayer();
+  save();
+}
+
+function renderStyles(selectedId) {
+  const sel = el('sd_stylelist');
+  if (!sel) return;
+  const list = settings().styles || [];
+  if (!list.length) {
+    sel.innerHTML = '<option value="">（还没有存档）</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const keep = (selectedId !== undefined ? selectedId : sel.value) || '';
+  sel.innerHTML = list.map((it) => '<option value="' + it.id + '">' + esc(styleLabel(it)) + '</option>').join('');
+  if (keep && list.some((it) => it.id === keep)) sel.value = keep;
+}
+
 function clampPos(pos, w, h) {
   if (!pos) return pos;
   return {
@@ -1066,6 +1141,7 @@ function restoreLayer() {
   if (s.read2) renderReadout(el('sd_position'), s.read2);
   if (s.blacklist && s.blacklist.length) renderBlacklist();
   renderUncertain();
+  renderStyles();
   renderStats();
 }
 
@@ -1216,6 +1292,59 @@ function bindLayer() {
   el('sd_dljson').addEventListener('click', () => {
     download(slug() + '.json', JSON.stringify(buildJSON(), null, 2));
     setStatus('sd_status5', 'JSON 已下载。', 'ok');
+  });
+
+  el('sd_stylesave').addEventListener('click', () => {
+    const s = settings();
+    if ((s.styles || []).length >= STYLE_LIMIT) {
+      setStatus('sd_stylestatus', '存档满了（' + STYLE_LIMIT + ' 份），先删几份。', 'error');
+      return;
+    }
+    const name = el('sd_stylename').value.trim() || s.name.trim() || '未命名文风';
+    const item = { id: 'st_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), schema: 1, name, savedAt: Date.now(), data: currentSnapshot() };
+    s.styles = (s.styles || []).concat([item]);
+    renderStyles(item.id);
+    setStatus('sd_stylestatus', '已存为「' + name + '」。', 'ok');
+    save();
+  });
+
+  el('sd_styleload').addEventListener('click', () => {
+    const id = el('sd_stylelist').value;
+    const item = (settings().styles || []).find((it) => it.id === id);
+    if (!item) {
+      setStatus('sd_stylestatus', '先选一份存档。', 'error');
+      return;
+    }
+    applySnapshot(item.data);
+    renderStyles(id);
+    setStatus('sd_stylestatus', '已载入「' + item.name + '」。', 'ok');
+  });
+
+  el('sd_styleover').addEventListener('click', () => {
+    const item = (settings().styles || []).find((it) => it.id === el('sd_stylelist').value);
+    if (!item) {
+      setStatus('sd_stylestatus', '先选一份存档。', 'error');
+      return;
+    }
+    item.data = currentSnapshot();
+    item.savedAt = Date.now();
+    renderStyles(item.id);
+    setStatus('sd_stylestatus', '已用当前内容覆盖「' + item.name + '」。', 'ok');
+    save();
+  });
+
+  el('sd_styledel').addEventListener('click', () => {
+    const s = settings();
+    const item = (s.styles || []).find((it) => it.id === el('sd_stylelist').value);
+    if (!item) {
+      setStatus('sd_stylestatus', '先选一份存档。', 'error');
+      return;
+    }
+    if (!window.confirm('删除存档「' + item.name + '」？删了就找不回。')) return;
+    s.styles = (s.styles || []).filter((it) => it.id !== item.id);
+    renderStyles('');
+    setStatus('sd_stylestatus', '已删除。', 'ok');
+    save();
   });
 
   el('sd_panel_close').addEventListener('click', () => {

@@ -22,6 +22,7 @@ const state = {
   test: { passage: DEFAULT_PASSAGE, rewrite: "", verdict: "" },
   play: { mode: "none" },
   thrifty: true,
+  styles: [],
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 },
   ui: { fabPos: null, panelPos: null, panelOpen: false }
@@ -716,6 +717,60 @@ function buildJSON() {
   };
 }
 
+const STYLE_LIMIT = 50;
+
+function styleLabel(it) {
+  const d = new Date(it.savedAt || Date.now());
+  const pad = (n) => String(n).padStart(2, "0");
+  return it.name + "（" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + "）";
+}
+
+function currentSnapshot() {
+  return {
+    feed: Object.assign({}, state.feed),
+    read1: state.read1,
+    beliefs: state.beliefs,
+    read2: state.read2,
+    blacklist: state.blacklist,
+    draft: state.draft,
+    uncertain: state.uncertain,
+    block: $("block").value,
+    test: Object.assign({}, state.test),
+    play: Object.assign({}, state.play)
+  };
+}
+
+function applySnapshot(data) {
+  state.feed = Object.assign({ source: "mine", genre: "narration", name: "", corpus: "" }, data.feed || {});
+  state.read1 = data.read1 || null;
+  state.beliefs = data.beliefs || [];
+  state.read2 = data.read2 || null;
+  state.blacklist = data.blacklist || [];
+  state.draft = data.draft || null;
+  state.uncertain = data.uncertain || [];
+  state.block = data.block || "";
+  state.test = Object.assign({ passage: DEFAULT_PASSAGE, rewrite: "", verdict: "" }, data.test || {});
+  state.play = Object.assign({ mode: "none" }, data.play || {});
+  restore();
+  restoreStep();
+  saveState();
+}
+
+function renderStyles(selectedId) {
+  const sel = $("style-list");
+  if (!sel) return;
+  const list = state.styles || [];
+  if (!list.length) {
+    sel.innerHTML = '<option value="">（还没有存档）</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const keep = (selectedId !== undefined ? selectedId : sel.value) || "";
+  sel.innerHTML = list.map((it) => '<option value="' + it.id + '">' + esc(styleLabel(it)) + "</option>").join("");
+  if (keep && list.some((it) => it.id === keep)) sel.value = keep;
+}
+
 function download(filename, text) {
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const a = document.createElement("a");
@@ -849,6 +904,7 @@ function restore() {
   if (state.read2) renderRead2(state.read2);
   if (state.blacklist && state.blacklist.length) renderBlacklist();
   renderUncertain();
+  renderStyles();
 
   renderStats();
   applyFab();
@@ -941,6 +997,56 @@ function bind() {
   $("download-pool").addEventListener("click", () => {
     download(slug() + "-pool.json", JSON.stringify({ k1: state.read1, k2: state.read2, draft: state.draft }, null, 2));
     setStatus("status-export", "蒸馏池已下载。", "ok");
+  });
+
+  $("style-save").addEventListener("click", () => {
+    if ((state.styles || []).length >= STYLE_LIMIT) {
+      setStatus("status-style", "存档满了（" + STYLE_LIMIT + " 份），先删几份。", "error");
+      return;
+    }
+    const name = $("style-name").value.trim() || (state.feed && state.feed.name ? state.feed.name : "") || "未命名文风";
+    const item = { id: "st_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), schema: 1, name, savedAt: Date.now(), data: currentSnapshot() };
+    state.styles = (state.styles || []).concat([item]);
+    renderStyles(item.id);
+    setStatus("status-style", "已存为「" + name + "」。", "ok");
+    saveState();
+  });
+
+  $("style-load").addEventListener("click", () => {
+    const item = (state.styles || []).find((it) => it.id === $("style-list").value);
+    if (!item) {
+      setStatus("status-style", "先选一份存档。", "error");
+      return;
+    }
+    applySnapshot(item.data);
+    renderStyles(item.id);
+    setStatus("status-style", "已载入「" + item.name + "」。", "ok");
+  });
+
+  $("style-over").addEventListener("click", () => {
+    const item = (state.styles || []).find((it) => it.id === $("style-list").value);
+    if (!item) {
+      setStatus("status-style", "先选一份存档。", "error");
+      return;
+    }
+    item.data = currentSnapshot();
+    item.savedAt = Date.now();
+    renderStyles(item.id);
+    setStatus("status-style", "已用当前内容覆盖「" + item.name + "」。", "ok");
+    saveState();
+  });
+
+  $("style-del").addEventListener("click", () => {
+    const item = (state.styles || []).find((it) => it.id === $("style-list").value);
+    if (!item) {
+      setStatus("status-style", "先选一份存档。", "error");
+      return;
+    }
+    if (!window.confirm("删除存档「" + item.name + "」？删了就找不回。")) return;
+    state.styles = (state.styles || []).filter((it) => it.id !== item.id);
+    renderStyles("");
+    setStatus("status-style", "已删除。", "ok");
+    saveState();
   });
 
   $("wfd-close").addEventListener("click", () => {

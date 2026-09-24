@@ -180,6 +180,23 @@
             <option value="actor">全权代演（AI 完整扮演 {{user}}）</option>
           </select>
         </label>
+        <label class="field">
+          <span>存档名（默认用文风名）</span>
+          <div class="inline">
+            <input id="style-name" type="text" placeholder="例如：冷硬短句">
+            <button id="style-save" class="ghost" type="button">存为存档</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>已有存档（最多 50 份）</span>
+          <div class="inline">
+            <select id="style-list"></select>
+            <button id="style-load" class="ghost" type="button">载入</button>
+            <button id="style-over" class="ghost" type="button">覆盖</button>
+            <button id="style-del" class="ghost" type="button">删除</button>
+          </div>
+        </label>
+        <div class="status" id="status-style"></div>
         <div class="actions">
           <button id="copy-block" class="primary" type="button">复制文风块</button>
           <button id="download-json" class="ghost" type="button">下载 JSON</button>
@@ -194,7 +211,7 @@
 <dialog id="config">
   <form method="dialog" class="config-form">
     <h2>API 设置</h2>
-    <p class="hint">OpenAI 兼容接口。Key 只存在这台浏览器的 localStorage，不上传。</p>
+    <p class="hint">OpenAI 兼容接口。Key 默认只在本次会话有效；勾选「记住 Key」才写入这台浏览器的 localStorage，不上传。</p>
     <label class="field">
       <span>Base URL</span>
       <input id="baseUrl" type="text" placeholder="https://api.deepseek.com/v1">
