@@ -32,7 +32,7 @@ const defaultSettings = Object.freeze({
 const settingsTpl = `
 <div class="sd-root inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
-    <b>大厨烹饪处 · 文风蒸馏</b>
+    <b>大厨烹饪处</b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
@@ -49,7 +49,7 @@ const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处"><i class
 const panelTpl = `
 <div class="sd-panel" id="sd_panel">
   <div class="sd-panel-head" id="sd_panel_head">
-    <span>大厨烹饪处 · 文风蒸馏</span>
+    <span>大厨烹饪处</span>
     <i class="fa-solid fa-xmark sd-panel-close" id="sd_panel_close"></i>
   </div>
   <div class="sd-panel-body">
