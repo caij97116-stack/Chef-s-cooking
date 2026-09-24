@@ -10,6 +10,7 @@ const CONFIG_KEY = "wfd_config";
 
 const state = {
   config: { baseUrl: "", apiKey: "", model: "", temperature: 0.7 },
+  rememberKey: true,
   feed: { source: "mine", genre: "narration", name: "", corpus: "" },
   read1: null,
   beliefs: [],
@@ -38,9 +39,16 @@ function lockOr(statusId) {
   return true;
 }
 
+function persistable(obj) {
+  const copy = Object.assign({}, obj);
+  copy.config = Object.assign({}, obj.config || {});
+  if (copy.rememberKey === false) copy.config.apiKey = "";
+  return copy;
+}
+
 function saveState() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORE_KEY, JSON.stringify(persistable(state)));
   } catch (e) {}
 }
 
@@ -51,8 +59,9 @@ function saveConfig() {
     model: $("model").value.trim(),
     temperature: Number($("temperature").value)
   };
+  state.rememberKey = $("rememberKey").checked;
   try {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config));
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(persistable(state).config));
   } catch (e) {}
   saveState();
 }
@@ -68,11 +77,16 @@ function loadState() {
       state.stats = Object.assign({ calls: 0, tokens: 0, saved: 0 }, parsed.stats || {});
       if (state.stats.saved == null) state.stats.saved = 0;
       state.cache = parsed.cache || {};
+      if (parsed.rememberKey === false) state.rememberKey = false;
+      if (!state.rememberKey) state.config.apiKey = "";
     }
   } catch (e) {}
   try {
     const raw = localStorage.getItem(CONFIG_KEY);
-    if (raw) state.config = Object.assign(state.config, JSON.parse(raw));
+    if (raw) {
+      state.config = Object.assign(state.config, JSON.parse(raw));
+      if (!state.rememberKey) state.config.apiKey = "";
+    }
   } catch (e) {}
 }
 
@@ -737,6 +751,7 @@ function restoreStep() {
 function restore() {
   $("baseUrl").value = state.config.baseUrl || "";
   $("apiKey").value = state.config.apiKey || "";
+  $("rememberKey").checked = state.rememberKey !== false;
   $("model").value = state.config.model || "";
   $("temperature").value = state.config.temperature != null ? state.config.temperature : 0.7;
   $("tempval").textContent = String($("temperature").value);
@@ -774,6 +789,9 @@ function bind() {
   });
   $("temperature").addEventListener("input", (e) => {
     $("tempval").textContent = String(e.target.value);
+  });
+  $("rememberKey").addEventListener("change", () => {
+    saveConfig();
   });
 
   $("btn-read").addEventListener("click", () => runRead1(false));

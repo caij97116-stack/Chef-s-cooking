@@ -7,7 +7,7 @@ const DEFAULT_PASSAGE =
 const defaultSettings = Object.freeze({
   mode: 'st',
   baseUrl: '',
-  apiKey: '',
+  rememberKey: true,
   model: '',
   temperature: 0.7,
   source: 'mine',
@@ -74,6 +74,7 @@ const panelTpl = `
         <label class="sd-field"><span>API Key</span>
           <input id="sd_apikey" type="password" placeholder="sk-...">
         </label>
+        <label class="sd-check"><input id="sd_rememberkey" type="checkbox"> <span>记住 Key（存在本机；关掉则只在本次会话有效）</span></label>
         <label class="sd-field"><span>模型</span>
           <div class="sd-inline">
             <input id="sd_model" type="text" list="sd_modellist" placeholder="deepseek-chat">
@@ -209,6 +210,48 @@ function save() {
   ctx().saveSettingsDebounced();
 }
 
+const APIKEY_STORE = 'sd_api_key';
+let sessionKey = '';
+
+function readStoredKey() {
+  try {
+    return localStorage.getItem(APIKEY_STORE) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function storeKey(v) {
+  try {
+    localStorage.setItem(APIKEY_STORE, v);
+  } catch (e) {}
+}
+
+function clearStoredKey() {
+  try {
+    localStorage.removeItem(APIKEY_STORE);
+  } catch (e) {}
+}
+
+function getApiKey() {
+  if (settings().rememberKey) return sessionKey || readStoredKey();
+  return sessionKey;
+}
+
+function setApiKey(v) {
+  sessionKey = v;
+  if (settings().rememberKey) storeKey(v);
+}
+
+function migrateKey() {
+  const s = settings();
+  if (typeof s.apiKey === 'string' && s.apiKey) {
+    sessionKey = s.apiKey;
+    storeKey(s.apiKey);
+  }
+  if (Object.hasOwn(s, 'apiKey')) delete s.apiKey;
+}
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -324,13 +367,14 @@ async function generateRawViaST(messages) {
 
 async function generateViaCustom(messages, signal) {
   const s = settings();
-  if (!s.baseUrl || !s.apiKey || !s.model) {
+  const key = getApiKey();
+  if (!s.baseUrl || !key || !s.model) {
     throw new Error('先填好自定义站子的 Base URL / Key / 模型');
   }
   const url = s.baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.apiKey },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
     body: JSON.stringify({ model: s.model, messages, temperature: Number(s.temperature) || 0.7 }),
     signal
   });
@@ -430,7 +474,7 @@ async function cachedRun(stage, inputKey, producer, force) {
 async function pullModels() {
   const s = settings();
   s.baseUrl = el('sd_baseurl').value.trim();
-  s.apiKey = el('sd_apikey').value.trim();
+  setApiKey(el('sd_apikey').value.trim());
   save();
   if (!s.baseUrl) {
     setStatus('sd_status0', '先填 Base URL。', 'error');
@@ -440,7 +484,8 @@ async function pullModels() {
   el('sd_pull').disabled = true;
   try {
     const url = s.baseUrl.replace(/\/+$/, '') + '/models';
-    const res = await fetch(url, { headers: s.apiKey ? { Authorization: 'Bearer ' + s.apiKey } : {} });
+    const key = getApiKey();
+    const res = await fetch(url, { headers: key ? { Authorization: 'Bearer ' + key } : {} });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const list = (data.data || data.models || [])
@@ -914,8 +959,10 @@ function applyLayer() {
 
 function restoreLayer() {
   const s = settings();
+  if (s.rememberKey && !sessionKey) sessionKey = readStoredKey();
   el('sd_baseurl').value = s.baseUrl || '';
-  el('sd_apikey').value = s.apiKey || '';
+  el('sd_apikey').value = getApiKey();
+  el('sd_rememberkey').checked = !!s.rememberKey;
   el('sd_model').value = s.model || '';
   el('sd_temp').value = s.temperature != null ? s.temperature : 0.7;
   el('sd_tempval').textContent = String(el('sd_temp').value);
@@ -1025,7 +1072,15 @@ function bindLayer() {
 
   el('sd_mode').addEventListener('change', (e) => { settings().mode = e.target.value; save(); updateMode(); });
   el('sd_baseurl').addEventListener('input', (e) => { settings().baseUrl = e.target.value.trim(); save(); });
-  el('sd_apikey').addEventListener('input', (e) => { settings().apiKey = e.target.value.trim(); save(); });
+  el('sd_apikey').addEventListener('input', (e) => { setApiKey(e.target.value.trim()); save(); });
+  el('sd_rememberkey').addEventListener('change', (e) => {
+    settings().rememberKey = e.target.checked;
+    const v = el('sd_apikey').value.trim();
+    sessionKey = v;
+    if (e.target.checked) storeKey(v);
+    else clearStoredKey();
+    save();
+  });
   el('sd_model').addEventListener('input', (e) => { settings().model = e.target.value.trim(); save(); });
   el('sd_temp').addEventListener('input', (e) => {
     settings().temperature = Number(e.target.value);
@@ -1184,6 +1239,11 @@ function startBootstrap() {
     return;
   }
   hooked = true;
+  try {
+    migrateKey();
+  } catch (e) {
+    console.error('[大厨烹饪处] 迁移 Key 失败', e);
+  }
   try {
     const { eventSource, event_types } = ctx();
     eventSource.on(event_types.APP_READY, addUI);
