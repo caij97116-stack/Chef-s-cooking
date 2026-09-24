@@ -30,17 +30,15 @@ const defaultSettings = Object.freeze({
 });
 
 const settingsTpl = `
-<div class="sd-root inline-drawer">
+<div id="sd_root" class="sd-root inline-drawer">
   <div class="inline-drawer-toggle inline-drawer-header">
     <b>大厨烹饪处</b>
     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
   </div>
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
-    <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
-    <div class="sd-actions">
-      <button id="sd_open" class="menu_button">打开大厨烹饪处</button>
-    </div>
+    <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>在页面上显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
+    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开。</div>
   </div>
 </div>`;
 
@@ -730,11 +728,6 @@ function bind() {
     save();
     applyFab();
   });
-  el('sd_open').addEventListener('click', () => {
-    settings().panelOpen = true;
-    save();
-    applyPanel();
-  });
   el('sd_panel_close').addEventListener('click', () => {
     settings().panelOpen = false;
     save();
@@ -748,16 +741,19 @@ function bind() {
   });
 }
 
+let bound = false;
+
 function addUI() {
-  if (el('sd_panel')) return;
   const host = document.getElementById('extensions_settings2');
   if (!host) {
     setTimeout(addUI, 500);
     return;
   }
-  host.insertAdjacentHTML('beforeend', settingsTpl);
-  document.body.insertAdjacentHTML('beforeend', fabTpl);
-  document.body.insertAdjacentHTML('beforeend', panelTpl);
+  if (!el('sd_root')) host.insertAdjacentHTML('beforeend', settingsTpl);
+  if (!el('sd_fab')) document.body.insertAdjacentHTML('beforeend', fabTpl);
+  if (!el('sd_panel')) document.body.insertAdjacentHTML('beforeend', panelTpl);
+  if (bound) return;
+  bound = true;
   restore();
   bind();
   applyFab();
@@ -770,13 +766,14 @@ export function onActivate() {
 }
 
 export function onEnable() {
-  const root = document.querySelector('.sd-root');
+  const root = el('sd_root');
   if (root) root.style.display = '';
   applyFab();
+  applyPanel();
 }
 
 export function onDisable() {
-  const root = document.querySelector('.sd-root');
+  const root = el('sd_root');
   if (root) root.style.display = 'none';
   const f = el('sd_fab');
   if (f) f.style.display = 'none';
