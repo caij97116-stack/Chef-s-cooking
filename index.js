@@ -27,10 +27,7 @@ const defaultSettings = Object.freeze({
   verdict: '',
   playMode: 'none',
   thrifty: true,
-  showFab: true,
   styles: [],
-  fabPos: null,
-  panelPos: null,
   panelOpen: false,
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
@@ -44,16 +41,17 @@ const settingsTpl = `
   </div>
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
-    <label class="sd-check"><input id="sd_showfab" type="checkbox"> <span>在页面上显示悬浮球（可拖动，点开就是大厨烹饪处）</span></label>
-    <div class="sd-note">工具本体是页面右下角那个圆形悬浮球，点它展开面板。本会话已调用模型 <b id="sd_stats_root">0 次</b>。</div>
+    <div class="sd-note">打开方式：点输入框右侧的「魔法棒」按钮，在菜单里选<b>大厨烹饪处</b>。本会话已调用模型 <b id="sd_stats_root">0 次</b>。</div>
     <div class="sd-note">省 API：同样的输入只用调一次；面板里默认开着「省流」，七遍读只花一次调用；面板顶部会显示命中缓存省下的次数。</div>
   </div>
 </div>`;
 
-const fabTpl = `<div class="sd-fab" id="sd_fab" title="大厨烹饪处" role="button" aria-label="大厨烹饪处" style="position:fixed;right:12px;bottom:calc(140px + env(safe-area-inset-bottom, 0px));width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;line-height:1;cursor:grab;z-index:2147483646;color:#1b1e24;background:#c8a45c;border:2px solid rgba(255,255,255,.55);box-shadow:0 6px 22px rgba(0,0,0,.5);pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;"><i class="fa-solid fa-utensils" aria-hidden="true"></i><span class="sd-fab-fallback" style="display:none;font-size:18px;">厨</span></div>`;
+const menuItemTpl = `<div id="sd_menuitem" class="list-group-item flex-container flexGap5 interactable" tabindex="0" role="button" title="大厨烹饪处"><div class="fa-solid fa-utensils extensionsMenuExtensionButton" aria-hidden="true"></div><span>大厨烹饪处</span></div>`;
+
+const backdropTpl = `<div id="sd_backdrop" style="position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,.5);display:none;"></div>`;
 
 const panelTpl = `
-<div class="sd-panel" id="sd_panel" style="position:fixed;z-index:2147483646;width:min(420px,92vw);max-height:82vh;display:none;flex-direction:column;overflow:hidden;border-radius:14px;color:#eeeeee;background:#1b1e24;border:1px solid rgba(255,255,255,.18);box-shadow:0 12px 40px rgba(0,0,0,.45);">
+<div class="sd-panel" id="sd_panel" style="position:fixed;z-index:2147483647;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);max-height:86vh;display:none;flex-direction:column;overflow:hidden;border-radius:14px;color:#eeeeee;background:#1b1e24;border:1px solid rgba(255,255,255,.18);box-shadow:0 12px 40px rgba(0,0,0,.45);">
   <div class="sd-panel-head" id="sd_panel_head">
     <span>大厨烹饪处 <span class="sd-stat" id="sd_stats">已调用 0 次</span></span>
     <span class="sd-head-right">
@@ -1257,81 +1255,21 @@ function renderStyles(selectedId) {
   if (keep && list.some((it) => it.id === keep)) sel.value = keep;
 }
 
-function clampPos(pos, w, h) {
-  if (!pos) return pos;
-  return {
-    x: Math.max(0, Math.min(window.innerWidth - (w || 0), pos.x)),
-    y: Math.max(0, Math.min(window.innerHeight - (h || 0), pos.y))
-  };
-}
-
-function applyFab() {
-  const s = settings();
-  const f = el('sd_fab');
-  if (!f) return;
-  const show = s.showFab !== false;
-  f.style.display = show ? 'flex' : 'none';
-  f.style.pointerEvents = 'auto';
-  f.style.zIndex = '2147483646';
-  if (!show) return;
-
-  if (s.fabPos && typeof s.fabPos.x === 'number' && typeof s.fabPos.y === 'number') {
-    const w = f.offsetWidth || 56;
-    const h = f.offsetHeight || 56;
-    const p = clampPos(s.fabPos, w, h);
-    const offscreen =
-      p.x < -4 ||
-      p.y < -4 ||
-      p.x > window.innerWidth - 12 ||
-      p.y > window.innerHeight - 12;
-    if (offscreen) {
-      placeFabDefault(f);
-      s.fabPos = null;
-      save();
-    } else {
-      f.style.left = p.x + 'px';
-      f.style.top = p.y + 'px';
-      f.style.right = 'auto';
-      f.style.bottom = 'auto';
-    }
-  } else {
-    placeFabDefault(f);
-  }
-  if (typeof ensureFabIcon === 'function') ensureFabIcon(f);
-}
-
 function applyPanel() {
   const s = settings();
   const p = el('sd_panel');
+  const b = el('sd_backdrop');
   if (!p) return;
   if (!s.panelOpen) {
     p.style.display = 'none';
+    if (b) b.style.display = 'none';
     return;
   }
   p.style.display = 'flex';
-  if (s.panelPos) {
-    const width = p.offsetWidth || Math.min(420, window.innerWidth * 0.92);
-    const p2 = clampPos(s.panelPos, width, 60);
-    p.style.left = p2.x + 'px';
-    p.style.top = p2.y + 'px';
-    p.style.right = 'auto';
-    p.style.bottom = 'auto';
-  } else {
-    const w = Math.min(420, window.innerWidth * 0.92);
-    p.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
-    p.style.top = '70px';
-    p.style.right = 'auto';
-    p.style.bottom = 'auto';
-  }
-}
-
-function applyLayer() {
-  // 球与面板已直接挂 body，不再依赖全屏图层
-  const s = settings();
-  const show = s.showFab !== false;
-  const fab = el('sd_fab');
-  if (fab) fab.style.display = show ? 'flex' : 'none';
-  // 面板由 applyPanel 管
+  p.style.left = '50%';
+  p.style.top = '50%';
+  p.style.transform = 'translate(-50%,-50%)';
+  if (b) b.style.display = 'block';
 }
 
 function setVal(id, value, prop) {
@@ -1345,8 +1283,6 @@ function setVal(id, value, prop) {
 function restoreLayer() {
   const s = settings();
   if (s.rememberKey && !sessionKey) sessionKey = readStoredKey();
-  // showFab 缺省 true，避免旧存档缺字段时球被藏掉
-  if (s.showFab == null) s.showFab = true;
   setVal('sd_baseurl', s.baseUrl || '');
   setVal('sd_apikey', getApiKey());
   setVal('sd_rememberkey', !!s.rememberKey, 'checked');
@@ -1379,133 +1315,14 @@ function restoreLayer() {
 }
 
 function restoreSettings() {
-  const s = settings();
-  if (s.showFab == null) s.showFab = true;
-  if (el('sd_showfab')) el('sd_showfab').checked = s.showFab !== false;
   renderStats();
 }
 
-function togglePanelFromFab() {
+function togglePanel() {
   const s = settings();
   s.panelOpen = !s.panelOpen;
   save();
   applyPanel();
-  applyLayer();
-}
-
-function makeFab(fab) {
-  if (!fab || fab.dataset.sdBound === '1') return;
-  fab.dataset.sdBound = '1';
-
-  const point = (ev) => {
-    if (ev.touches && ev.touches[0]) {
-      return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
-    }
-    if (ev.changedTouches && ev.changedTouches[0]) {
-      return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
-    }
-    return { x: ev.clientX, y: ev.clientY };
-  };
-
-  const onDown = (e) => {
-    // 手机上需要非 passive 才能 preventDefault，减少页面跟着拖
-    if (e.cancelable) e.preventDefault();
-    const rect = fab.getBoundingClientRect();
-    const p0 = point(e);
-    const startX = p0.x;
-    const startY = p0.y;
-    const origX = rect.left;
-    const origY = rect.top;
-    let moved = false;
-
-    const onMove = (ev) => {
-      if (ev.cancelable) ev.preventDefault();
-      const p = point(ev);
-      const dx = p.x - startX;
-      const dy = p.y - startY;
-      if (Math.abs(dx) + Math.abs(dy) > 8) moved = true;
-      const w = fab.offsetWidth || 56;
-      const h = fab.offsetHeight || 56;
-      fab.style.left = Math.max(0, Math.min(window.innerWidth - w, origX + dx)) + 'px';
-      fab.style.top = Math.max(0, Math.min(window.innerHeight - h, origY + dy)) + 'px';
-      fab.style.right = 'auto';
-      fab.style.bottom = 'auto';
-    };
-
-    const onUp = (ev) => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onUp);
-      document.removeEventListener('touchcancel', onUp);
-      const r = fab.getBoundingClientRect();
-      try {
-        const s = settings();
-        s.fabPos = { x: r.left, y: r.top };
-        if (!moved) {
-          fab._sdLastToggle = Date.now();
-          s.panelOpen = !s.panelOpen;
-          save();
-          applyPanel();
-          applyLayer();
-        } else {
-          fab.dataset.sdDragging = '1';
-          setTimeout(() => { delete fab.dataset.sdDragging; }, 300);
-          save();
-        }
-      } catch (err) {
-        if (!moved) togglePanelFromFab();
-      }
-    };
-
-    document.addEventListener('pointermove', onMove, { passive: false });
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onUp);
-    document.addEventListener('touchcancel', onUp);
-  };
-
-  fab.addEventListener('pointerdown', onDown, { passive: false });
-  fab.addEventListener('touchstart', onDown, { passive: false });
-  // 兜底：部分 WebView 只触发 click
-  fab.addEventListener('click', (e) => {
-    if (fab.dataset.sdDragging === '1') return;
-    e.preventDefault();
-    // pointer 路径已处理则跳过（短时内）
-    const now = Date.now();
-    if (fab._sdLastToggle && now - fab._sdLastToggle < 400) return;
-    fab._sdLastToggle = now;
-    togglePanelFromFab();
-  });
-}
-
-function makePanelDrag(handle, target, savePos) {
-  handle.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.sd-panel-close') || e.target.closest('.sd-panel-stop')) return;
-    const rect = target.getBoundingClientRect();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const origX = rect.left;
-    const origY = rect.top;
-    const move = (ev) => {
-      const x = Math.max(0, Math.min(window.innerWidth - 60, origX + ev.clientX - startX));
-      const y = Math.max(0, Math.min(window.innerHeight - 44, origY + ev.clientY - startY));
-      target.style.left = x + 'px';
-      target.style.top = y + 'px';
-      target.style.right = 'auto';
-      target.style.bottom = 'auto';
-    };
-    const up = () => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
-      const r = target.getBoundingClientRect();
-      savePos({ x: r.left, y: r.top });
-    };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
-  });
 }
 
 function forceFromEvent(e) {
@@ -1752,43 +1569,31 @@ function bindLayer() {
     settings().panelOpen = false;
     save();
     applyPanel();
-    applyLayer();
   });
   el('sd_stop').addEventListener('click', stopRun);
 
-  makeFab(el('sd_fab'));
-  makePanelDrag(el('sd_panel_head'), el('sd_panel'), (pos) => {
-    settings().panelPos = pos;
-    save();
-  });
-
-  window.addEventListener('resize', () => {
-    applyFab();
-    applyPanel();
-  });
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => {
-      applyFab();
+  const backdrop = el('sd_backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', () => {
+      settings().panelOpen = false;
+      save();
       applyPanel();
     });
-    window.visualViewport.addEventListener('scroll', () => {
-      applyFab();
-    });
   }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && el('sd_panel') && el('sd_panel').style.display !== 'none') {
+      settings().panelOpen = false;
+      save();
+      applyPanel();
+    }
+  });
 }
 
 function bindSettings() {
-  const node = el('sd_showfab');
-  if (!node) return;
-  node.addEventListener('change', (e) => {
-    settings().showFab = e.target.checked;
-    save();
-    applyFab();
-    applyPanel();
-    applyLayer();
-  });
+  // 设置抽屉只展示说明，无开关需要绑定
 }
 
+let menuMounted = false;
 let layerMounted = false;
 let layerBound = false;
 let settingsMounted = false;
@@ -1796,109 +1601,48 @@ let hooked = false;
 let bootTimer = null;
 let bootTries = 0;
 
-function placeFabDefault(fab) {
-  if (!fab) return;
-  fab.style.left = 'auto';
-  fab.style.top = 'auto';
-  fab.style.right = '12px';
-  fab.style.bottom = 'calc(140px + env(safe-area-inset-bottom, 0px))';
-  fab.style.position = 'fixed';
-  fab.style.zIndex = '2147483646';
-  fab.style.display = 'flex';
-  fab.style.pointerEvents = 'auto';
-}
-
-function ensureFabIcon(fab) {
-  if (!fab) return;
-  // Font Awesome 未加载时显示「厨」
-  const icon = fab.querySelector('i.fa-utensils, i.fa-solid');
-  const fallback = fab.querySelector('.sd-fab-fallback');
-  if (!fallback) return;
-  requestAnimationFrame(() => {
-    let needFallback = true;
-    try {
-      if (icon) {
-        const w = icon.getBoundingClientRect().width;
-        needFallback = w < 4;
-      }
-    } catch (e) {}
-    fallback.style.display = needFallback ? 'inline' : 'none';
-    if (icon) icon.style.display = needFallback ? 'none' : '';
-  });
-}
-
 function ensureLayerDom() {
-  if (!document.body) return null;
+  if (!document.body) return false;
 
-  // 手机端：球和面板直接挂 body，避免全屏 fixed 图层在 iOS/WebView 里把子元素弄丢或点不到
-  let fab = el('sd_fab');
-  let panel = el('sd_panel');
+  // 清掉旧版的悬浮球与全屏图层（升级后不再需要）
+  ['sd_fab', 'sd_layer'].forEach((id) => {
+    const node = el(id);
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+  });
 
-  if (!fab) {
+  if (!el('sd_backdrop')) {
     const wrap = document.createElement('div');
-    wrap.innerHTML = fabTpl;
-    fab = wrap.firstElementChild;
-    document.body.appendChild(fab);
+    wrap.innerHTML = backdropTpl;
+    document.body.appendChild(wrap.firstElementChild);
   }
-  if (!panel) {
+  if (!el('sd_panel')) {
     const wrap = document.createElement('div');
     wrap.innerHTML = panelTpl.trim();
-    panel = wrap.firstElementChild;
-    document.body.appendChild(panel);
+    document.body.appendChild(wrap.firstElementChild);
   }
-
-  // 清掉旧的全屏图层（若还在）
-  const oldLayer = el('sd_layer');
-  if (oldLayer) {
-    try {
-      oldLayer.remove();
-    } catch (e) {
-      if (oldLayer.parentNode) oldLayer.parentNode.removeChild(oldLayer);
-    }
-  }
-
-  fab.style.pointerEvents = 'auto';
-  panel.style.pointerEvents = 'auto';
-  placeFabDefault(fab);
-  ensureFabIcon(fab);
-  return fab;
+  return !!el('sd_panel');
 }
 
 function mountLayer() {
   if (!document.body) return false;
-  let fab;
   try {
-    fab = ensureLayerDom();
+    if (!ensureLayerDom()) return false;
   } catch (e) {
-    console.error('[大厨烹饪处] 创建悬浮球失败', e);
+    console.error('[大厨烹饪处] 创建面板失败', e);
     return false;
   }
-  if (!fab || !el('sd_fab')) return false;
 
   try {
-    const s = settings();
-    if (s.showFab == null) {
-      s.showFab = true;
-      save();
-    }
-  } catch (e) {
-    console.warn('[大厨烹饪处] 读设置失败，仍显示悬浮球', e);
-  }
-
-  try {
-    applyFab();
     applyPanel();
-    applyLayer();
   } catch (e) {
-    console.warn('[大厨烹饪处] apply 失败', e);
-    placeFabDefault(el('sd_fab'));
+    console.warn('[大厨烹饪处] applyPanel 失败', e);
   }
 
   if (!layerBound) {
     try {
       restoreLayer();
     } catch (e) {
-      console.error('[大厨烹饪处] restoreLayer 失败（球仍会显示）', e);
+      console.error('[大厨烹饪处] restoreLayer 失败（面板仍可打开）', e);
     }
     try {
       bindLayer();
@@ -1907,37 +1651,41 @@ function mountLayer() {
       console.error('[大厨烹饪处] bindLayer 失败', e);
       layerBound = false;
     }
-  } else {
-    try {
-      applyFab();
-      applyPanel();
-      applyLayer();
-    } catch (e) {}
   }
 
-  layerMounted = !!el('sd_fab');
-  if (layerMounted) {
-    const node = el('sd_fab');
-    const rect = node.getBoundingClientRect();
-    console.log('[大厨烹饪处] 悬浮球已挂载', {
-      showFab: (function () { try { return settings().showFab !== false; } catch (e) { return true; } })(),
-      bound: layerBound,
-      w: window.innerWidth,
-      h: window.innerHeight,
-      rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height },
-      mobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent || '')
-    });
-    // 若完全在视口外，强制拉回
-    if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
-      placeFabDefault(node);
-      try {
-        settings().fabPos = null;
-        save();
-      } catch (e) {}
-      console.log('[大厨烹饪处] 悬浮球已移回默认位置');
-    }
-  }
+  layerMounted = !!el('sd_panel');
+  if (layerMounted) console.log('[大厨烹饪处] 面板已挂载（从魔法棒菜单打开）');
   return layerMounted;
+}
+
+function menuHost() {
+  return (
+    document.getElementById('extensionsMenu') ||
+    document.getElementById('extensions_menu') ||
+    null
+  );
+}
+
+function bindMenuItem() {
+  const item = el('sd_menuitem');
+  if (!item || item.dataset.sdBound === '1') return;
+  item.dataset.sdBound = '1';
+  const open = (e) => {
+    if (e) e.preventDefault();
+    togglePanel();
+  };
+  item.addEventListener('click', open);
+}
+
+function mountMenu() {
+  if (!el('sd_menuitem')) {
+    const host = menuHost();
+    if (!host) return false;
+    host.insertAdjacentHTML('beforeend', menuItemTpl);
+  }
+  bindMenuItem();
+  menuMounted = !!el('sd_menuitem');
+  return menuMounted;
 }
 
 function settingsHost() {
@@ -1970,9 +1718,14 @@ function addUI() {
   try {
     mountLayer();
   } catch (e) {
-    console.error('[大厨烹饪处] 挂载悬浮球失败', e);
+    console.error('[大厨烹饪处] 挂载面板失败', e);
     layerMounted = false;
     layerBound = false;
+  }
+  try {
+    mountMenu();
+  } catch (e) {
+    console.error('[大厨烹饪处] 挂载菜单项失败', e);
   }
   try {
     mountSettings();
@@ -1980,22 +1733,10 @@ function addUI() {
     console.error('[大厨烹饪处] 挂载设置项失败', e);
   }
   bootTries += 1;
-  // 球挂上即可停；设置项可以稍晚
-  if ((layerMounted && layerBound) || bootTries > 150) {
-    if (layerMounted && bootTimer && bootTries > 30) {
-      // 球已在，再给设置项一点时间后停
-      if (settingsMounted || bootTries > 150) {
-        clearInterval(bootTimer);
-        bootTimer = null;
-      }
-    } else if (bootTries > 150) {
-      if (bootTimer) {
-        clearInterval(bootTimer);
-        bootTimer = null;
-      }
-    }
-  }
-  if (layerMounted && layerBound && settingsMounted && bootTimer) {
+  if (layerMounted && menuMounted && settingsMounted && bootTimer) {
+    clearInterval(bootTimer);
+    bootTimer = null;
+  } else if (bootTries > 300 && bootTimer) {
     clearInterval(bootTimer);
     bootTimer = null;
   }
@@ -2039,20 +1780,16 @@ function startBootstrap() {
   }
   bindAppEvents();
   addUI();
-  if (!bootTimer) bootTimer = setInterval(addUI, 400);
-  // 保险：3 秒后再强制挂一次球（覆盖 1.16~1.18 加载时序差异）
+  if (!bootTimer) bootTimer = setInterval(addUI, 500);
+  // 保险：菜单容器可能要等顶栏渲染完，2.5 秒后再补一次
   setTimeout(() => {
     try {
-      if (!el('sd_fab')) {
-        layerMounted = false;
-        layerBound = false;
-      }
+      mountMenu();
       mountLayer();
-      applyFab();
     } catch (e) {
       console.warn('[大厨烹饪处] 延迟挂载失败', e);
     }
-  }, 3000);
+  }, 2500);
 }
 
 export function onActivate() {
@@ -2062,20 +1799,11 @@ export function onActivate() {
 export function onEnable() {
   const root = el('sd_root');
   if (root) root.style.display = '';
-  try {
-    const s = settings();
-    if (s.showFab == null) s.showFab = true;
-  } catch (e) {}
-  if (!el('sd_fab')) {
-    layerMounted = false;
-    layerBound = false;
-  }
   startBootstrap();
   try {
+    mountMenu();
     mountLayer();
-    applyFab();
     applyPanel();
-    applyLayer();
   } catch (e) {
     console.error('[大厨烹饪处] onEnable 应用 UI 失败', e);
   }
@@ -2084,12 +1812,13 @@ export function onEnable() {
 export function onDisable() {
   const root = el('sd_root');
   if (root) root.style.display = 'none';
-  const fab = el('sd_fab');
-  if (fab) fab.style.display = 'none';
   const panel = el('sd_panel');
   if (panel) panel.style.display = 'none';
-  const layer = el('sd_layer');
-  if (layer) layer.style.display = 'none';
+  const backdrop = el('sd_backdrop');
+  if (backdrop) backdrop.style.display = 'none';
+  const item = el('sd_menuitem');
+  if (item && item.parentNode) item.parentNode.removeChild(item);
+  menuMounted = false;
 }
 
 // 兼容 1.16+：扩展脚本往往在 DOMContentLoaded 之后才注入，
