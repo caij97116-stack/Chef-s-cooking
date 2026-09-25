@@ -176,7 +176,7 @@ const panelTpl = `
         <button id="sd_blackaddbtn" class="menu_button">加</button>
       </div>
       <div class="sd-actions">
-        <button id="sd_compose" class="menu_button">压成文风块</button>
+        <button id="sd_compose" class="menu_button sd-primary">压成文风块</button>
         <span id="sd_status3" class="sd-status"></span>
       </div>
     </div>
@@ -193,7 +193,7 @@ const panelTpl = `
         <label class="sd-field"><span>改写结果</span><textarea id="sd_rewrite" rows="5"></textarea></label>
       </div>
       <div class="sd-actions">
-        <button id="sd_dorewrite" class="menu_button">用文风改写</button>
+        <button id="sd_dorewrite" class="menu_button sd-primary">用文风改写</button>
         <button id="sd_like" class="menu_button">像，通过</button>
         <button id="sd_unlike" class="menu_button" title="判为不像会自动修订文风块">不像，自动修块</button>
         <span id="sd_status4" class="sd-status"></span>
