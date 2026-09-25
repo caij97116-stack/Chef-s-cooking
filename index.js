@@ -42,7 +42,7 @@ const settingsTpl = `
   </div>
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
-    <div class="sd-note">打开方式：点输入框右侧的「魔法棒」按钮，在菜单里选<b>大厨烹饪处</b>。本会话已调用模型 <b id="sd_stats_root">0 次</b>。</div>
+    <div class="sd-note">打开方式：点输入框右侧的「魔法棒」按钮，在菜单里选<b>大厨烹饪处</b>。面板标题显示本会话调用次数；这里显示累计：<b id="sd_stats_root">累计 0 次</b>。</div>
     <div class="sd-note">省 API：同样的输入只用调一次；面板里默认开着「一次读完」，全部读解只花一次调用；面板顶部会显示命中缓存省下的次数。</div>
   </div>
 </div>`;
@@ -377,9 +377,12 @@ function hashKey(value) {
   return (h >>> 0).toString(36);
 }
 
+let sessionCalls = 0;
+
 function bumpStats(tokens) {
   const s = settings();
   s.stats.calls += 1;
+  sessionCalls += 1;
   if (tokens) s.stats.tokens += tokens;
   renderStats();
   save();
@@ -387,11 +390,11 @@ function bumpStats(tokens) {
 
 function renderStats() {
   const s = settings();
-  let txt = '已调用 ' + s.stats.calls + ' 次';
+  let txt = '本会话 ' + sessionCalls + ' 次 · 累计 ' + s.stats.calls + ' 次';
   if (s.stats.saved) txt += ' · 省 ' + s.stats.saved + ' 次';
   if (s.stats.tokens) txt += ' · ' + s.stats.tokens + ' tok';
   if (el('sd_stats')) el('sd_stats').textContent = txt;
-  if (el('sd_stats_root')) el('sd_stats_root').textContent = s.stats.calls + ' 次' + (s.stats.saved ? '（省 ' + s.stats.saved + ' 次）' : '');
+  if (el('sd_stats_root')) el('sd_stats_root').textContent = '累计 ' + s.stats.calls + ' 次' + (s.stats.saved ? '（省 ' + s.stats.saved + ' 次）' : '');
 }
 
 function estimateTokens(text) {
@@ -526,14 +529,15 @@ async function generateViaCustomStream(messages, signal, onDelta) {
 
 let activeController = null;
 let cancelled = false;
-let busy = false;
+// 只锁正在跑的那一步，别的按钮不受影响
+const busySteps = new Set();
 
-function lockOr(statusId) {
-  if (busy) {
-    setStatus(statusId, '还有一步在跑，等它结束。', 'error');
+function lockOr(statusId, step) {
+  if (busySteps.has(step)) {
+    setStatus(statusId, '这一步还在跑，等它结束。', 'error');
     return false;
   }
-  busy = true;
+  busySteps.add(step);
   return true;
 }
 
@@ -572,7 +576,8 @@ function stopRun() {
   setStatus('sd_status1', '已请求停止。');
 }
 
-const CACHE_LIMIT = 5;
+// 每阶段保留的缓存份数。存多了会把酒馆的 settings.json 撑肥，2 份够「改回来还能命中」用
+const CACHE_LIMIT = 2;
 
 function cacheList(stage) {
   const s = settings();
@@ -648,6 +653,15 @@ function updateMode() {
   const s = settings();
   el('sd_mode').value = s.mode;
   el('sd_modecustom').style.display = s.mode === 'custom' ? '' : 'none';
+  // 「当前酒馆模型」模式走 generateRaw，接不了中断信号：把「停」置灰并说明
+  const stop = el('sd_stop');
+  if (stop) {
+    const stOnly = s.mode !== 'custom';
+    stop.classList.toggle('sd-disabled', stOnly);
+    stop.title = stOnly
+      ? '「当前酒馆模型」模式下无法中途断开请求；点这里仍会把这轮结果丢弃'
+      : '停止本次生成';
+  }
 }
 
 function readoutRow(label, value, layer) {
@@ -857,7 +871,7 @@ async function runRead1(force) {
     setStatus('sd_status1', '先贴语料。', 'error');
     return;
   }
-  if (!lockOr('sd_status1')) return;
+  if (!lockOr('sd_status1', 'read1')) return;
   cancelled = false;
   setStatus('sd_status1', s.thrifty ? '一次读完…' : '读解中…');
   el('sd_read1').disabled = true;
@@ -922,7 +936,7 @@ async function runRead1(force) {
     setStatus('sd_status1', String(e.message || e), 'error');
   } finally {
     el('sd_read1').disabled = false;
-    busy = false;
+    busySteps.delete('read1');
   }
 }
 
@@ -932,7 +946,7 @@ async function runRefineLayer(layer) {
     setStatus('sd_status1', '先读前三遍。', 'error');
     return;
   }
-  if (!lockOr('sd_status1')) return;
+  if (!lockOr('sd_status1', 'refine')) return;
   cancelled = false;
   setStatus('sd_status1', '重读「' + (Prompts.LAYERS[layer] || layer) + '」…');
   try {
@@ -950,7 +964,7 @@ async function runRefineLayer(layer) {
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
   } finally {
-    busy = false;
+    busySteps.delete('refine');
   }
 }
 
@@ -961,7 +975,7 @@ async function runRead2(force) {
     setStatus('sd_status2', '至少留一条信念。', 'error');
     return;
   }
-  if (!lockOr('sd_status2')) return;
+  if (!lockOr('sd_status2', 'read2')) return;
   cancelled = false;
   setStatus('sd_status2', '读后三遍…');
   el('sd_read2').disabled = true;
@@ -984,7 +998,7 @@ async function runRead2(force) {
     setStatus('sd_status2', String(e.message || e), 'error');
   } finally {
     el('sd_read2').disabled = false;
-    busy = false;
+    busySteps.delete('read2');
   }
 }
 
@@ -994,7 +1008,7 @@ async function runCompose(force) {
     setStatus('sd_status3', '先把读解做完。', 'error');
     return;
   }
-  if (!lockOr('sd_status3')) return;
+  if (!lockOr('sd_status3', 'compose')) return;
   cancelled = false;
   setStatus('sd_status3', '压成块…');
   el('sd_compose').disabled = true;
@@ -1033,7 +1047,7 @@ async function runCompose(force) {
     setStatus('sd_status3', String(e.message || e), 'error');
   } finally {
     el('sd_compose').disabled = false;
-    busy = false;
+    busySteps.delete('compose');
   }
 }
 
@@ -1049,7 +1063,7 @@ async function runRewrite(force) {
     setStatus('sd_status4', '先贴一段默认 AI 腔。', 'error');
     return;
   }
-  if (!lockOr('sd_status4')) return;
+  if (!lockOr('sd_status4', 'rewrite')) return;
   cancelled = false;
   setStatus('sd_status4', '改写中…');
   el('sd_dorewrite').disabled = true;
@@ -1075,7 +1089,7 @@ async function runRewrite(force) {
     setStatus('sd_status4', String(e.message || e), 'error');
   } finally {
     el('sd_dorewrite').disabled = false;
-    busy = false;
+    busySteps.delete('rewrite');
   }
 }
 
@@ -1092,7 +1106,7 @@ async function runRework(force) {
     setStatus('sd_status4', '先跑一次改写再判像不像。', 'error');
     return;
   }
-  if (!lockOr('sd_status4')) return;
+  if (!lockOr('sd_status4', 'rework')) return;
   cancelled = false;
   setStatus('sd_status4', '不像，自动修块…');
   el('sd_unlike').disabled = true;
@@ -1117,7 +1131,7 @@ async function runRework(force) {
     setStatus('sd_status4', String(e.message || e), 'error');
   } finally {
     el('sd_unlike').disabled = false;
-    busy = false;
+    busySteps.delete('rework');
   }
 }
 
@@ -1449,25 +1463,35 @@ function forceFromEvent(e) {
   return !!(e && e.shiftKey);
 }
 
+// 逐个绑定：缺哪个元素只跳过哪个，不再一条 try 包全部、一挂全挂
+function bind(id, event, fn) {
+  const node = el(id);
+  if (!node) {
+    console.warn('[大厨烹饪处] 绑定失败，缺元素 #' + id);
+    return;
+  }
+  node.addEventListener(event, fn);
+}
+
 function bindLayer() {
   document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
     t.addEventListener('click', () => switchModule(t.dataset.mod));
   });
 
-  el('sd_read1').addEventListener('click', (e) => runRead1(forceFromEvent(e)));
-  el('sd_read2').addEventListener('click', (e) => runRead2(forceFromEvent(e)));
-  el('sd_compose').addEventListener('click', (e) => runCompose(forceFromEvent(e)));
-  el('sd_dorewrite').addEventListener('click', (e) => runRewrite(forceFromEvent(e)));
+  bind('sd_read1', 'click', (e) => runRead1(forceFromEvent(e)));
+  bind('sd_read2', 'click', (e) => runRead2(forceFromEvent(e)));
+  bind('sd_compose', 'click', (e) => runCompose(forceFromEvent(e)));
+  bind('sd_dorewrite', 'click', (e) => runRewrite(forceFromEvent(e)));
 
-  el('sd_readout').addEventListener('click', (e) => {
+  bind('sd_readout', 'click', (e) => {
     const btn = e.target.closest('.sd-refresh');
     if (btn) runRefineLayer(btn.dataset.layer);
   });
 
-  el('sd_mode').addEventListener('change', (e) => { settings().mode = e.target.value; save(); updateMode(); });
-  el('sd_baseurl').addEventListener('input', (e) => { settings().baseUrl = e.target.value.trim(); save(); });
-  el('sd_apikey').addEventListener('input', (e) => { setApiKey(e.target.value.trim()); save(); });
-  el('sd_rememberkey').addEventListener('change', (e) => {
+  bind('sd_mode', 'change', (e) => { settings().mode = e.target.value; save(); updateMode(); });
+  bind('sd_baseurl', 'input', (e) => { settings().baseUrl = e.target.value.trim(); save(); });
+  bind('sd_apikey', 'input', (e) => { setApiKey(e.target.value.trim()); save(); });
+  bind('sd_rememberkey', 'change', (e) => {
     settings().rememberKey = e.target.checked;
     const v = el('sd_apikey').value.trim();
     sessionKey = v;
@@ -1475,20 +1499,20 @@ function bindLayer() {
     else clearStoredKey();
     save();
   });
-  el('sd_model').addEventListener('input', (e) => { settings().model = e.target.value.trim(); save(); });
-  el('sd_stream').addEventListener('change', (e) => { settings().stream = e.target.checked; save(); });
-  el('sd_temp').addEventListener('input', (e) => {
+  bind('sd_model', 'input', (e) => { settings().model = e.target.value.trim(); save(); });
+  bind('sd_stream', 'change', (e) => { settings().stream = e.target.checked; save(); });
+  bind('sd_temp', 'input', (e) => {
     settings().temperature = Number(e.target.value);
     el('sd_tempval').textContent = String(e.target.value);
     save();
   });
-  el('sd_pull').addEventListener('click', pullModels);
+  bind('sd_pull', 'click', pullModels);
 
-  el('sd_source').addEventListener('change', (e) => { settings().source = e.target.value; save(); });
-  el('sd_genre').addEventListener('change', (e) => { settings().genre = e.target.value; save(); });
-  el('sd_thrifty').addEventListener('change', (e) => { settings().thrifty = e.target.checked; save(); });
-  el('sd_name').addEventListener('input', (e) => { settings().name = e.target.value; save(); });
-  el('sd_corpus').addEventListener('input', (e) => { settings().corpus = e.target.value; save(); renderCorpusStat(); });
+  bind('sd_source', 'change', (e) => { settings().source = e.target.value; save(); });
+  bind('sd_genre', 'change', (e) => { settings().genre = e.target.value; save(); });
+  bind('sd_thrifty', 'change', (e) => { settings().thrifty = e.target.checked; save(); });
+  bind('sd_name', 'input', (e) => { settings().name = e.target.value; save(); });
+  bind('sd_corpus', 'input', (e) => { settings().corpus = e.target.value; save(); renderCorpusStat(); });
 
   function applyTakenCorpus(text, note) {
     settings().corpus = text;
@@ -1498,7 +1522,7 @@ function bindLayer() {
     setStatus('sd_takestatus', note, 'ok');
   }
 
-  el('sd_takecard').addEventListener('click', () => {
+  bind('sd_takecard', 'click', () => {
     const c = SillyTavern.getContext();
     let f = null;
     try {
@@ -1525,7 +1549,7 @@ function bindLayer() {
     applyTakenCorpus(text, '已取角色卡语料（' + text.length + ' 字），可再增删。');
   });
 
-  el('sd_takechat').addEventListener('click', () => {
+  bind('sd_takechat', 'click', () => {
     const c = SillyTavern.getContext();
     const chat = Array.isArray(c.chat) ? c.chat : [];
     const msgs = chat.filter((m) => m && !m.is_user && typeof m.mes === 'string' && m.mes.trim()).map((m) => m.mes.trim());
@@ -1536,11 +1560,11 @@ function bindLayer() {
     }
     applyTakenCorpus(text, '已取 ' + msgs.length + ' 条角色发言（' + text.length + ' 字），可再增删。');
   });
-  el('sd_passage').addEventListener('input', (e) => { settings().passage = e.target.value; save(); });
-  el('sd_block').addEventListener('input', (e) => { settings().block = e.target.value; save(); });
-  el('sd_play').addEventListener('change', (e) => { settings().playMode = e.target.value; save(); });
+  bind('sd_passage', 'input', (e) => { settings().passage = e.target.value; save(); });
+  bind('sd_block', 'input', (e) => { settings().block = e.target.value; save(); });
+  bind('sd_play', 'change', (e) => { settings().playMode = e.target.value; save(); });
 
-  el('sd_blackaddbtn').addEventListener('click', () => {
+  bind('sd_blackaddbtn', 'click', () => {
     const v = el('sd_blackadd').value.trim();
     if (!v) return;
     settings().blacklist.push({ text: v, on: true });
@@ -1549,18 +1573,25 @@ function bindLayer() {
     save();
   });
 
-  el('sd_like').addEventListener('click', () => {
+  bind('sd_like', 'click', () => {
     settings().verdict = 'like';
-    setStatus('sd_status4', '像，可以拿走了。', 'ok');
+    setStatus('sd_status4', '像，通过。可以拿走了。', 'ok');
+    const like = el('sd_like');
+    const copy = el('sd_copy');
+    if (like) {
+      like.classList.add('sd-done-flash');
+      setTimeout(() => like.classList.remove('sd-done-flash'), 2400);
+    }
+    if (copy) copy.classList.add('sd-attn');
     save();
   });
-  el('sd_unlike').addEventListener('click', () => {
+  bind('sd_unlike', 'click', () => {
     settings().verdict = 'unlike';
     save();
     runRework();
   });
 
-  el('sd_copy').addEventListener('click', async () => {
+  bind('sd_copy', 'click', async () => {
     const text = el('sd_block').value;
     try {
       await navigator.clipboard.writeText(text);
@@ -1570,13 +1601,13 @@ function bindLayer() {
     }
   });
 
-  el('sd_dljson').addEventListener('click', () => {
+  bind('sd_dljson', 'click', () => {
     download(slug() + '.json', JSON.stringify(buildJSON(), null, 2));
     setStatus('sd_status5', 'JSON 已下载。', 'ok');
   });
 
-  el('sd_import').addEventListener('click', () => el('sd_importfile').click());
-  el('sd_importfile').addEventListener('change', async (e) => {
+  bind('sd_import', 'click', () => el('sd_importfile').click());
+  bind('sd_importfile', 'change', async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
@@ -1591,7 +1622,7 @@ function bindLayer() {
     }
   });
 
-  el('sd_wiexport').addEventListener('click', () => {
+  bind('sd_wiexport', 'click', () => {
     const s = settings();
     const block = el('sd_block').value.trim();
     if (!block) {
@@ -1603,7 +1634,7 @@ function bindLayer() {
     setStatus('sd_wistatus', '世界书 JSON 已下载，用「世界信息」的导入加载。', 'ok');
   });
 
-  el('sd_wisave').addEventListener('click', async () => {
+  bind('sd_wisave', 'click', async () => {
     const c = SillyTavern.getContext();
     if (typeof c.loadWorldInfo !== 'function' || typeof c.saveWorldInfo !== 'function') {
       setStatus('sd_wistatus', '这本酒馆版本没有世界书写入接口，请改用「导出世界书」。', 'error');
@@ -1636,7 +1667,7 @@ function bindLayer() {
     }
   });
 
-  el('sd_stylesave').addEventListener('click', () => {
+  bind('sd_stylesave', 'click', () => {
     const s = settings();
     if ((s.styles || []).length >= STYLE_LIMIT) {
       setStatus('sd_stylestatus', '文风存档满了（' + STYLE_LIMIT + ' 份），先删几份。', 'error');
@@ -1650,7 +1681,7 @@ function bindLayer() {
     save();
   });
 
-  el('sd_styleload').addEventListener('click', () => {
+  bind('sd_styleload', 'click', () => {
     const id = el('sd_stylelist').value;
     const item = (settings().styles || []).find((it) => it.id === id);
     if (!item) {
@@ -1662,7 +1693,7 @@ function bindLayer() {
     setStatus('sd_stylestatus', '已载入「' + item.name + '」。', 'ok');
   });
 
-  el('sd_styleover').addEventListener('click', () => {
+  bind('sd_styleover', 'click', () => {
     const item = (settings().styles || []).find((it) => it.id === el('sd_stylelist').value);
     if (!item) {
       setStatus('sd_stylestatus', '先选一份存档。', 'error');
@@ -1675,7 +1706,7 @@ function bindLayer() {
     save();
   });
 
-  el('sd_styledel').addEventListener('click', () => {
+  bind('sd_styledel', 'click', () => {
     const s = settings();
     const item = (s.styles || []).find((it) => it.id === el('sd_stylelist').value);
     if (!item) {
@@ -1689,12 +1720,12 @@ function bindLayer() {
     save();
   });
 
-  el('sd_panel_close').addEventListener('click', () => {
+  bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;
     save();
     applyPanel();
   });
-  el('sd_stop').addEventListener('click', stopRun);
+  bind('sd_stop', 'click', stopRun);
 
   const backdrop = el('sd_backdrop');
   if (backdrop) {
