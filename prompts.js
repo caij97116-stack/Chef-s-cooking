@@ -292,3 +292,28 @@ ${source}
     }
   ];
 }
+
+export function polish({ styleBlock, description, personality, scenario }) {
+  return [
+    { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
+    {
+      role: "user",
+      content: `用下面的文风重写这张角色卡的文字。只改写法：让句子带上这个文风的句法、节奏和用词；人物设定、事实、关系、数值一个都不能变，不能增删设定内容。只改写下面给出的字段，字段一一对应。
+
+【文风块】
+${styleBlock}
+
+【角色卡原文】
+【description】
+${description || "（无）"}
+
+【personality】
+${personality || "（无）"}
+
+【scenario】
+${scenario || "（无）"}
+
+只输出 JSON，键与上面给出的字段一致（没给的键不要输出）：{"description":"","personality":"","scenario":""}`
+    }
+  ];
+}

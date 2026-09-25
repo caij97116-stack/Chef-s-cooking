@@ -32,6 +32,7 @@ const defaultSettings = Object.freeze({
   activeModule: 'distill',
   opening: { source: '', styleFrom: 'current', scene: 'first', sceneCustom: '', count: '2', candidates: [], picked: -1, archive: [] },
   voice: { corpus: '', entry: '' },
+  polish: { description: '', personality: '', scenario: '' },
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -363,7 +364,33 @@ const panelTpl = `
     </div>
 
     <div class="sd-page" id="sd_page_polish" style="display:none">
-      <div class="sd-note">卡片润色在建中，下一批更新就来。</div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">取卡片文字</div>
+        <div class="sd-inline">
+          <button id="sd_pl_takecard" class="menu_button">取角色卡</button>
+          <span id="sd_pl_takestatus" class="sd-status"></span>
+        </div>
+        <label class="sd-field"><span>描述 description</span>
+          <textarea id="sd_pl_desc" rows="4" placeholder="角色卡的描述。"></textarea>
+        </label>
+        <label class="sd-field"><span>性格 personality</span>
+          <textarea id="sd_pl_pers" rows="3" placeholder="角色卡的性格。"></textarea>
+        </label>
+        <label class="sd-field"><span>场景 scenario</span>
+          <textarea id="sd_pl_scen" rows="3" placeholder="角色卡的场景。"></textarea>
+        </label>
+        <div class="sd-actions">
+          <button id="sd_pl_go" class="menu_button sd-primary">用当前文风润色</button>
+          <span id="sd_pl_status" class="sd-status"></span>
+        </div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">写回<span class="sd-hint">写回前会再确认一次</span></div>
+        <div class="sd-actions">
+          <button id="sd_pl_write" class="menu_button sd-primary">写回角色卡</button>
+        </div>
+        <div id="sd_pl_wstatus" class="sd-status"></div>
+      </div>
     </div>
   </div>
 </div>`;
@@ -1776,6 +1803,124 @@ async function voiceSaveWorldInfo() {
   }
 }
 
+/* ================= 卡片润色 ================= */
+
+const POLISH_FIELDS = [
+  ['description', 'sd_pl_desc'],
+  ['personality', 'sd_pl_pers'],
+  ['scenario', 'sd_pl_scen']
+];
+
+function polishTakeCard() {
+  const c = ctx();
+  const ch = c && c.characters && c.characters[c.characterId];
+  if (!ch) {
+    setStatus('sd_pl_takestatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  const s = settings();
+  POLISH_FIELDS.forEach(([key, id]) => {
+    const v = String(ch[key] || '');
+    s.polish[key] = v;
+    setVal(id, v);
+  });
+  save();
+  setStatus('sd_pl_takestatus', '已取「' + ch.name + '」的卡片文字，可再增删。', 'ok');
+}
+
+async function runPolish(force) {
+  const s = settings();
+  const fields = {};
+  POLISH_FIELDS.forEach(([key, id]) => {
+    s.polish[key] = el(id) ? el(id).value : s.polish[key];
+    if (String(s.polish[key] || '').trim()) fields[key] = String(s.polish[key]).trim();
+  });
+  save();
+  if (!Object.keys(fields).length) {
+    setStatus('sd_pl_status', '三个字段都是空的，先取角色卡。', 'error');
+    return;
+  }
+  const block = (el('sd_block') && el('sd_block').value.trim()) || String(s.block || '').trim();
+  if (!block) {
+    setStatus('sd_pl_status', '文风块是空的，先去「文风蒸馏」成块，或在存档里载入一套。', 'error');
+    return;
+  }
+  if (!lockOr('sd_pl_status', 'polish')) return;
+  cancelled = false;
+  setStatus('sd_pl_status', '润色中…');
+  el('sd_pl_go').disabled = true;
+  try {
+    const key = hashKey({ stage: 'polish', block, fields });
+    const { data, cached } = await cachedRun(
+      'polish',
+      key,
+      async () =>
+        parseJSON(
+          await callModel(
+            Prompts.polish({
+              styleBlock: block,
+              description: fields.description || '',
+              personality: fields.personality || '',
+              scenario: fields.scenario || ''
+            })
+          )
+        ),
+      force
+    );
+    let applied = 0;
+    POLISH_FIELDS.forEach(([fkey, id]) => {
+      if (fields[fkey] && data[fkey] != null && String(data[fkey]).trim()) {
+        const v = String(data[fkey]).trim();
+        s.polish[fkey] = v;
+        setVal(id, v);
+        applied += 1;
+      }
+    });
+    if (!applied) throw new Error('模型没返回可用的改写，重试一次。');
+    setStatus('sd_pl_status', cached ? '输入没变，用上次结果，未再调用 API。' : '润色好了（' + applied + ' 个字段），检查一下再写回。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_pl_status', String(e.message || e), 'error');
+  } finally {
+    el('sd_pl_go').disabled = false;
+    busySteps.delete('polish');
+  }
+}
+
+async function polishWrite() {
+  const c = ctx();
+  const s = settings();
+  const updates = {};
+  POLISH_FIELDS.forEach(([key, id]) => {
+    const v = (el(id) ? el(id).value : s.polish[key] || '').trim();
+    if (v) updates[key] = v;
+  });
+  if (!Object.keys(updates).length) {
+    setStatus('sd_pl_wstatus', '没有可写回的内容。', 'error');
+    return;
+  }
+  const ch = c && c.characters && c.characters[c.characterId];
+  if (!ch) {
+    setStatus('sd_pl_wstatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  const names = { description: '描述', personality: '性格', scenario: '场景' };
+  if (!window.confirm('把润色后的 ' + Object.keys(updates).map((k) => names[k]).join(' / ') + ' 写回角色卡「' + ch.name + '」？\n原文字会被覆盖。')) return;
+  Object.keys(updates).forEach((k) => {
+    ch[k] = updates[k];
+  });
+  try {
+    if (typeof c.writeCharacterFields === 'function') {
+      await c.writeCharacterFields(ch.name, updates);
+      setStatus('sd_pl_wstatus', '已写回「' + ch.name + '」。', 'ok');
+    } else {
+      setStatus('sd_pl_wstatus', '已写入内存；这版酒馆没有直接保存接口，请到角色管理面板点一次「保存」落盘。', 'ok');
+    }
+  } catch (e) {
+    setStatus('sd_pl_wstatus', '写入失败：' + String(e.message || e), 'error');
+  }
+}
+
 function slug() {
   const n = (settings().name || '文风').trim();
   return n.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || '文风';
@@ -2106,6 +2251,11 @@ function restoreLayer() {
     setVal('sd_vc_corpus', s.voice.corpus || '');
     setVal('sd_vc_entry', s.voice.entry || '');
   } catch (e) { console.warn('[大厨烹饪处] voice 字段恢复失败', e); }
+  try {
+    setVal('sd_pl_desc', s.polish.description || '');
+    setVal('sd_pl_pers', s.polish.personality || '');
+    setVal('sd_pl_scen', s.polish.scenario || '');
+  } catch (e) { console.warn('[大厨烹饪处] polish 字段恢复失败', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -2434,6 +2584,14 @@ function bindLayer() {
     }
   });
   bind('sd_vc_wisave', 'click', voiceSaveWorldInfo);
+
+  /* ---- 卡片润色 ---- */
+  bind('sd_pl_takecard', 'click', polishTakeCard);
+  bind('sd_pl_desc', 'input', (e) => { settings().polish.description = e.target.value; save(); });
+  bind('sd_pl_pers', 'input', (e) => { settings().polish.personality = e.target.value; save(); });
+  bind('sd_pl_scen', 'input', (e) => { settings().polish.scenario = e.target.value; save(); });
+  bind('sd_pl_go', 'click', (e) => runPolish(forceFromEvent(e)));
+  bind('sd_pl_write', 'click', polishWrite);
 
   bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;
