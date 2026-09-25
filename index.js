@@ -308,7 +308,26 @@ const panelTpl = `
     </div>
 
     <div class="sd-page" id="sd_page_remsg" style="display:none">
-      <div class="sd-note">楼层改写在建中，下一批更新就来。</div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">选楼层<span class="sd-hint">只列最近的 AI 发言，点一条选中</span></div>
+        <div class="sd-inline">
+          <button id="sd_remsg_refresh" class="menu_button">刷新列表</button>
+        </div>
+        <div id="sd_remsg_list" class="sd-cards"></div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">改写</div>
+        <div class="sd-actions">
+          <button id="sd_remsg_go" class="menu_button sd-primary">用当前文风块改写</button>
+          <span id="sd_remsg_status" class="sd-status"></span>
+        </div>
+        <label class="sd-field"><span>改写结果（可手改）</span>
+          <textarea id="sd_remsg_result" rows="8" placeholder="改写结果会出现在这里。"></textarea>
+        </label>
+        <div class="sd-actions">
+          <button id="sd_remsg_write" class="menu_button sd-primary">写回这一楼</button>
+        </div>
+      </div>
     </div>
 
     <div class="sd-page" id="sd_page_voice" style="display:none">
@@ -1513,6 +1532,121 @@ function opArchiveDel() {
   save();
 }
 
+/* ================= 楼层改写 ================= */
+
+let remsgList = [];
+let remsgPicked = -1;
+
+function remsgMessages() {
+  const c = ctx();
+  const chat = Array.isArray(c.chat) ? c.chat : [];
+  const out = [];
+  chat.forEach((m, i) => {
+    if (m && !m.is_user && typeof m.mes === 'string' && m.mes.trim()) {
+      out.push({ i, text: m.mes.trim(), name: m.name || '' });
+    }
+  });
+  return out;
+}
+
+function renderRemsg() {
+  const target = el('sd_remsg_list');
+  if (!target) return;
+  let list = [];
+  try {
+    list = remsgMessages().slice(-12).reverse();
+  } catch (e) {
+    target.innerHTML = '<div class="sd-note">拿不到聊天记录。</div>';
+    return;
+  }
+  remsgList = list;
+  if (!list.length) {
+    target.innerHTML = '<div class="sd-note">当前聊天里没有角色发言。</div>';
+    return;
+  }
+  target.innerHTML = list
+    .map(({ text, name }, k) => {
+      const prev = text.length > 80 ? text.slice(0, 80) + '…' : text;
+      return (
+        '<div class="sd-card' + (k === remsgPicked ? ' sd-picked' : '') + '" data-k="' + k + '">' +
+        '<div class="sd-cardbody"><div class="sd-meta">' + esc(name || '角色') + ' · ' + esc(prev) + '</div></div></div>'
+      );
+    })
+    .join('');
+  target.querySelectorAll('.sd-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      remsgPicked = Number(card.dataset.k);
+      renderRemsg();
+    });
+  });
+}
+
+async function runRemsg(force) {
+  const m = remsgList[remsgPicked];
+  if (!m) {
+    setStatus('sd_remsg_status', '先在上面点选一层。', 'error');
+    return;
+  }
+  const block = (el('sd_block') && el('sd_block').value.trim()) || String(settings().block || '').trim();
+  if (!block) {
+    setStatus('sd_remsg_status', '文风块是空的，先去「文风蒸馏」成块，或在存档里载入一套。', 'error');
+    return;
+  }
+  if (!lockOr('sd_remsg_status', 'remsg')) return;
+  cancelled = false;
+  setStatus('sd_remsg_status', '改写中…');
+  el('sd_remsg_go').disabled = true;
+  try {
+    const key = hashKey({ stage: 'remsg', block, passage: m.text });
+    const { data, cached } = await cachedRun(
+      'remsg',
+      key,
+      async () => (await callModel(Prompts.rewrite({ block, passage: m.text }))).trim(),
+      force
+    );
+    setVal('sd_remsg_result', data);
+    setStatus('sd_remsg_status', cached ? '输入没变，用上次结果，未再调用 API。' : '改好了，检查一下再写回。', 'ok');
+  } catch (e) {
+    setStatus('sd_remsg_status', String(e.message || e), 'error');
+  } finally {
+    el('sd_remsg_go').disabled = false;
+    busySteps.delete('remsg');
+  }
+}
+
+async function remsgWrite() {
+  const m = remsgList[remsgPicked];
+  const text = (el('sd_remsg_result') ? el('sd_remsg_result').value : '').trim();
+  if (!m || !text) {
+    setStatus('sd_remsg_status', '先选楼层并改写。', 'error');
+    return;
+  }
+  if (!window.confirm('把改写结果写回第 ' + (m.i + 1) + ' 楼（' + (m.name || '角色') + ' 的发言）？\n原内容会被覆盖，建议先备份聊天。')) return;
+  try {
+    const c = ctx();
+    if (!Array.isArray(c.chat) || !c.chat[m.i]) throw new Error('聊天记录变了，刷新列表重选一次。');
+    c.chat[m.i].mes = text;
+    if (typeof c.saveChatConditional === 'function') await c.saveChatConditional();
+    else if (typeof c.saveChat === 'function') await c.saveChat();
+    const node = document.querySelector('[mesid="' + m.i + '"] .mes_text');
+    if (node) {
+      try {
+        if (typeof c.messageFormatting === 'function') {
+          node.innerHTML = c.messageFormatting(text, m.name || '', false, false, m.i);
+        } else {
+          node.textContent = text;
+        }
+      } catch (e2) {
+        node.textContent = text;
+      }
+    }
+    setStatus('sd_remsg_status', '已写回第 ' + (m.i + 1) + ' 楼并保存。', 'ok');
+    renderRemsg();
+  } catch (e) {
+    setStatus('sd_remsg_status', String(e.message || e), 'error');
+  }
+}
+
 function slug() {
   const n = (settings().name || '文风').trim();
   return n.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || '文风';
@@ -1834,6 +1968,7 @@ function restoreLayer() {
   try { renderOpStyleSelect(); } catch (e) { console.warn('[大厨烹饪处] renderOpStyleSelect', e); }
   try { renderOpenings(); } catch (e) { console.warn('[大厨烹饪处] renderOpenings', e); }
   try { renderOpArch(); } catch (e) { console.warn('[大厨烹饪处] renderOpArch', e); }
+  try { renderRemsg(); } catch (e) { console.warn('[大厨烹饪处] renderRemsg', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -2136,6 +2271,11 @@ function bindLayer() {
   bind('sd_op_archsave', 'click', opArchiveSave);
   bind('sd_op_archload', 'click', opArchiveLoad);
   bind('sd_op_archdel', 'click', opArchiveDel);
+
+  /* ---- 楼层改写 ---- */
+  bind('sd_remsg_refresh', 'click', renderRemsg);
+  bind('sd_remsg_go', 'click', (e) => runRemsg(forceFromEvent(e)));
+  bind('sd_remsg_write', 'click', remsgWrite);
 
   bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;

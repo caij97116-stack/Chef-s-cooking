@@ -201,6 +201,11 @@
 .sd-card:hover { background: var(--sd-card-hover); }
 
 .sd-card.sd-off { opacity: 0.45; }
+
+.sd-card.sd-picked {
+  outline: 1px solid var(--sd-accent, #4a90d9);
+}
+
 .sd-cardbody { flex: 1; }
 .sd-cardbody input { width: 100%; box-sizing: border-box; }
 
