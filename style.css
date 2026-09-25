@@ -1,3 +1,27 @@
+.sd-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.sd-tab {
+  border: 1px solid rgba(176, 214, 255, 0.35);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.sd-tab.sd-on {
+  background: rgba(72, 154, 224, 0.45);
+  opacity: 1;
+  font-weight: 600;
+}
+
 .sd-root .sd-note {
   font-size: 0.85em;
   opacity: 0.75;

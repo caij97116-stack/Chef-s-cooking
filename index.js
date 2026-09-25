@@ -29,6 +29,7 @@ const defaultSettings = Object.freeze({
   thrifty: true,
   styles: [],
   panelOpen: false,
+  activeModule: 'distill',
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -60,6 +61,15 @@ const panelTpl = `
     </span>
   </div>
   <div class="sd-panel-body">
+    <div class="sd-tabs" id="sd_tabs">
+      <button class="sd-tab" id="sd_tab_distill" data-mod="distill">🔥 文风蒸馏</button>
+      <button class="sd-tab" id="sd_tab_opening" data-mod="opening">🎬 开场白</button>
+      <button class="sd-tab" id="sd_tab_remsg" data-mod="remsg">✏️ 楼层改写</button>
+      <button class="sd-tab" id="sd_tab_voice" data-mod="voice">🗣 说话腔</button>
+      <button class="sd-tab" id="sd_tab_polish" data-mod="polish">✨ 卡片润色</button>
+    </div>
+
+    <div class="sd-page" id="sd_page_distill">
     <div class="sd-sec">
       <div class="sd-sec-title">生成方式</div>
       <label class="sd-field"><span>用哪个模型</span>
@@ -215,6 +225,23 @@ const panelTpl = `
         <button id="sd_wisave" class="menu_button">写入世界书</button>
       </div>
       <div id="sd_wistatus" class="sd-status"></div>
+    </div>
+    </div>
+
+    <div class="sd-page" id="sd_page_opening" style="display:none">
+      <div class="sd-note">开场白工坊在建中，下一批更新就来。</div>
+    </div>
+
+    <div class="sd-page" id="sd_page_remsg" style="display:none">
+      <div class="sd-note">楼层改写在建中，下一批更新就来。</div>
+    </div>
+
+    <div class="sd-page" id="sd_page_voice" style="display:none">
+      <div class="sd-note">角色说话腔在建中，下一批更新就来。</div>
+    </div>
+
+    <div class="sd-page" id="sd_page_polish" style="display:none">
+      <div class="sd-note">卡片润色在建中，下一批更新就来。</div>
     </div>
   </div>
 </div>`;
@@ -1255,6 +1282,31 @@ function renderStyles(selectedId) {
   if (keep && list.some((it) => it.id === keep)) sel.value = keep;
 }
 
+// 占位：地基②会实现真正的向导式步骤逻辑
+function updateWizard() {}
+
+function applyModule() {
+  const s = settings();
+  const mod = s.activeModule === 'opening' || s.activeModule === 'remsg' || s.activeModule === 'voice' || s.activeModule === 'polish'
+    ? s.activeModule
+    : 'distill';
+  document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
+    t.classList.toggle('sd-on', t.dataset.mod === mod);
+  });
+  ['distill', 'opening', 'remsg', 'voice', 'polish'].forEach((m) => {
+    const page = el('sd_page_' + m);
+    if (page) page.style.display = m === mod ? '' : 'none';
+  });
+  if (mod === 'distill') updateWizard();
+}
+
+function switchModule(mod) {
+  const s = settings();
+  s.activeModule = mod === 'opening' || mod === 'remsg' || mod === 'voice' || mod === 'polish' ? mod : 'distill';
+  save();
+  applyModule();
+}
+
 function applyPanel() {
   const s = settings();
   const p = el('sd_panel');
@@ -1321,6 +1373,7 @@ function restoreLayer() {
   try { renderStyles(); } catch (e) { console.warn('[大厨烹饪处] renderStyles', e); }
   try { renderWiList(); } catch (e) { console.warn('[大厨烹饪处] renderWiList', e); }
   try { renderStats(); } catch (e) { console.warn('[大厨烹饪处] renderStats', e); }
+  try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
 function restoreSettings() {
@@ -1339,6 +1392,10 @@ function forceFromEvent(e) {
 }
 
 function bindLayer() {
+  document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
+    t.addEventListener('click', () => switchModule(t.dataset.mod));
+  });
+
   el('sd_read1').addEventListener('click', (e) => runRead1(forceFromEvent(e)));
   el('sd_read2').addEventListener('click', (e) => runRead2(forceFromEvent(e)));
   el('sd_compose').addEventListener('click', (e) => runCompose(forceFromEvent(e)));
