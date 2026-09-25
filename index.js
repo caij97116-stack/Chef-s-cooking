@@ -31,6 +31,7 @@ const defaultSettings = Object.freeze({
   panelOpen: false,
   activeModule: 'distill',
   opening: { source: '', styleFrom: 'current', scene: 'first', sceneCustom: '', count: '2', candidates: [], picked: -1, archive: [] },
+  voice: { corpus: '', entry: '' },
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -331,7 +332,34 @@ const panelTpl = `
     </div>
 
     <div class="sd-page" id="sd_page_voice" style="display:none">
-      <div class="sd-note">角色说话腔在建中，下一批更新就来。</div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">喂对白<span class="sd-hint">这个角色开口说的话，越多越准</span></div>
+        <div class="sd-inline">
+          <button id="sd_vc_takedial" class="menu_button">取角色卡示例对白</button>
+          <button id="sd_vc_takechat" class="menu_button">取聊天里的角色发言</button>
+          <span id="sd_vc_takestatus" class="sd-status"></span>
+        </div>
+        <label class="sd-field"><span>对白语料</span>
+          <textarea id="sd_vc_corpus" rows="6" placeholder="角色的对白，一行一句或分段都行。"></textarea>
+        </label>
+        <div class="sd-actions">
+          <button id="sd_vc_go" class="menu_button sd-primary">蒸馏说话腔</button>
+          <span id="sd_vc_status" class="sd-status"></span>
+        </div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">说话方式条目<span class="sd-hint">可手改</span></div>
+        <textarea id="sd_vc_entry" rows="10" placeholder="蒸馏结果会出现在这里。"></textarea>
+        <div class="sd-actions">
+          <button id="sd_vc_copy" class="menu_button">复制条目</button>
+        </div>
+        <div class="sd-inline">
+          <select id="sd_vc_wilist"></select>
+          <input id="sd_vc_winame" type="text" placeholder="或填新世界书名">
+          <button id="sd_vc_wisave" class="menu_button">写入世界书</button>
+        </div>
+        <div id="sd_vc_wistatus" class="sd-status"></div>
+      </div>
     </div>
 
     <div class="sd-page" id="sd_page_polish" style="display:none">
@@ -1647,6 +1675,107 @@ async function remsgWrite() {
   }
 }
 
+/* ================= 角色说话腔 ================= */
+
+function voiceTakeDialogue() {
+  const c = ctx();
+  const ch = c && c.characters && c.characters[c.characterId];
+  const text = String((ch && (ch.mes_example || ch.mesExamples)) || '').trim();
+  if (!text) {
+    setStatus('sd_vc_takestatus', '角色卡里没有示例对白，改用「取聊天里的角色发言」。', 'error');
+    return;
+  }
+  settings().voice.corpus = text;
+  setVal('sd_vc_corpus', text);
+  save();
+  setStatus('sd_vc_takestatus', '已取示例对白（' + text.length + ' 字），可再增删。', 'ok');
+}
+
+function voiceTakeChat() {
+  const c = ctx();
+  const chat = Array.isArray(c.chat) ? c.chat : [];
+  const msgs = chat.filter((m) => m && !m.is_user && typeof m.mes === 'string' && m.mes.trim()).map((m) => m.mes.trim());
+  const text = msgs.join('\n\n').trim();
+  if (!text) {
+    setStatus('sd_vc_takestatus', '当前聊天里没有角色发言。', 'error');
+    return;
+  }
+  settings().voice.corpus = text;
+  setVal('sd_vc_corpus', text);
+  save();
+  setStatus('sd_vc_takestatus', '已取 ' + msgs.length + ' 条角色发言（' + text.length + ' 字），可再增删。', 'ok');
+}
+
+async function runVoice(force) {
+  const s = settings();
+  s.voice.corpus = (el('sd_vc_corpus') ? el('sd_vc_corpus').value : s.voice.corpus).trim();
+  save();
+  if (!s.voice.corpus) {
+    setStatus('sd_vc_status', '先取对白语料。', 'error');
+    return;
+  }
+  if (!lockOr('sd_vc_status', 'voice')) return;
+  cancelled = false;
+  setStatus('sd_vc_status', '蒸馏中…');
+  el('sd_vc_go').disabled = true;
+  try {
+    const key = hashKey({ stage: 'voice', corpus: s.voice.corpus });
+    const { data, cached } = await cachedRun(
+      'voice',
+      key,
+      async () => parseJSON(await callModel(Prompts.speechStyle({ source: s.voice.corpus }))),
+      force
+    );
+    const entry = String(data.entry || '').trim();
+    if (!entry) throw new Error('模型没返回条目，重试一次。');
+    s.voice.entry = entry;
+    el('sd_vc_entry').value = entry;
+    setStatus('sd_vc_status', cached ? '输入没变，用上次结果，未再调用 API。' : '说话腔蒸好了，可手改。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_vc_status', String(e.message || e), 'error');
+  } finally {
+    el('sd_vc_go').disabled = false;
+    busySteps.delete('voice');
+  }
+}
+
+async function voiceSaveWorldInfo() {
+  const c = ctx();
+  if (typeof c.loadWorldInfo !== 'function' || typeof c.saveWorldInfo !== 'function') {
+    setStatus('sd_vc_wistatus', '这版酒馆没有世界书写入接口，请复制后手动粘贴。', 'error');
+    return;
+  }
+  const entry = (el('sd_vc_entry') ? el('sd_vc_entry').value : settings().voice.entry).trim();
+  if (!entry) {
+    setStatus('sd_vc_wistatus', '条目是空的，先蒸馏。', 'error');
+    return;
+  }
+  const pick = el('sd_vc_wilist').value || '';
+  const name = el('sd_vc_winame').value.trim() || pick || '说话方式';
+  let keyName = '说话方式';
+  try {
+    const ch = c.characters && c.characters[c.characterId];
+    if (ch && ch.name) keyName = ch.name + ' · 说话方式';
+  } catch (e) {}
+  if (!window.confirm('把「说话方式」条目写进世界书「' + name + '」？\n触发关键词：' + keyName)) return;
+  try {
+    const data = (await c.loadWorldInfo(name)) || { entries: {} };
+    if (!data.entries) data.entries = {};
+    const uids = Object.keys(data.entries)
+      .map((k) => Number(data.entries[k] && data.entries[k].uid != null ? data.entries[k].uid : k))
+      .filter((n) => Number.isFinite(n));
+    const uid = uids.length ? Math.max(...uids) + 1 : 0;
+    data.entries[uid] = buildLorebookEntry(keyName, entry, uid);
+    await c.saveWorldInfo(name, data, true);
+    if (typeof c.reloadWorldInfoEditor === 'function') c.reloadWorldInfoEditor(name);
+    renderWiList();
+    setStatus('sd_vc_wistatus', '已写入「' + name + '」，去「世界信息」看看。', 'ok');
+  } catch (e) {
+    setStatus('sd_vc_wistatus', '写入失败：' + String(e.message || e), 'error');
+  }
+}
+
 function slug() {
   const n = (settings().name || '文风').trim();
   return n.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || '文风';
@@ -1810,8 +1939,7 @@ function buildLorebook(name, content) {
   return { name, entries: { 0: buildLorebookEntry(name, content, 0) } };
 }
 
-function renderWiList() {
-  const sel = el('sd_wilist');
+function fillWiSelect(sel) {
   if (!sel) return;
   let names = [];
   try {
@@ -1823,6 +1951,11 @@ function renderWiList() {
   sel.innerHTML = names.length
     ? names.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('')
     : '<option value="">（没有已有世界书）</option>';
+}
+
+function renderWiList() {
+  fillWiSelect(el('sd_wilist'));
+  fillWiSelect(el('sd_vc_wilist'));
 }
 
 function renderStyles(selectedId) {
@@ -1969,6 +2102,10 @@ function restoreLayer() {
   try { renderOpenings(); } catch (e) { console.warn('[大厨烹饪处] renderOpenings', e); }
   try { renderOpArch(); } catch (e) { console.warn('[大厨烹饪处] renderOpArch', e); }
   try { renderRemsg(); } catch (e) { console.warn('[大厨烹饪处] renderRemsg', e); }
+  try {
+    setVal('sd_vc_corpus', s.voice.corpus || '');
+    setVal('sd_vc_entry', s.voice.entry || '');
+  } catch (e) { console.warn('[大厨烹饪处] voice 字段恢复失败', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -2276,6 +2413,27 @@ function bindLayer() {
   bind('sd_remsg_refresh', 'click', renderRemsg);
   bind('sd_remsg_go', 'click', (e) => runRemsg(forceFromEvent(e)));
   bind('sd_remsg_write', 'click', remsgWrite);
+
+  /* ---- 角色说话腔 ---- */
+  bind('sd_vc_takedial', 'click', voiceTakeDialogue);
+  bind('sd_vc_takechat', 'click', voiceTakeChat);
+  bind('sd_vc_corpus', 'input', (e) => { settings().voice.corpus = e.target.value; save(); });
+  bind('sd_vc_go', 'click', (e) => runVoice(forceFromEvent(e)));
+  bind('sd_vc_entry', 'input', (e) => { settings().voice.entry = e.target.value; save(); });
+  bind('sd_vc_copy', 'click', async () => {
+    const text = (el('sd_vc_entry') ? el('sd_vc_entry').value : '').trim();
+    if (!text) {
+      setStatus('sd_vc_status', '条目是空的，先蒸馏。', 'error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus('sd_vc_status', '条目已复制。', 'ok');
+    } catch (err) {
+      setStatus('sd_vc_status', '复制失败，请手动选中复制。', 'error');
+    }
+  });
+  bind('sd_vc_wisave', 'click', voiceSaveWorldInfo);
 
   bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;
