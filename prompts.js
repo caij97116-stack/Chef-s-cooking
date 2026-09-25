@@ -234,3 +234,42 @@ ${badRewrite}
     }
   ];
 }
+
+export function openings({ source, styleBlock, scene, count }) {
+  return [
+    { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
+    {
+      role: "user",
+      content: `根据下面的角色素材，写 ${count} 条开场白。开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明、不要“（未命名）”这类占位。
+
+【场景】${scene}
+【条数】${count} 条，切入角度要有明显区分，不要一个意思换皮。
+${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}
+【角色素材】
+${source}
+
+只输出 JSON：{"openings":["",""]}`
+    }
+  ];
+}
+
+export function rewriteOpening({ source, styleBlock, scene, old }) {
+  return [
+    { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
+    {
+      role: "user",
+      content: `重写下面这条开场白，换一个切入角度或写法，保持场景与人物不变，不要复述原句。
+开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明。
+
+【场景】${scene}
+${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}
+【角色素材】
+${source}
+
+【要重写的这条】
+${old}
+
+只输出 JSON：{"opening":""}`
+    }
+  ];
+}

@@ -30,6 +30,7 @@ const defaultSettings = Object.freeze({
   styles: [],
   panelOpen: false,
   activeModule: 'distill',
+  opening: { source: '', styleFrom: 'current', scene: 'first', sceneCustom: '', count: '2', candidates: [], picked: -1, archive: [] },
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -239,7 +240,71 @@ const panelTpl = `
     </div>
 
     <div class="sd-page" id="sd_page_opening" style="display:none">
-      <div class="sd-note">开场白工坊在建中，下一批更新就来。</div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">选题源</div>
+        <div class="sd-inline">
+          <button id="sd_op_takecard" class="menu_button">取角色卡</button>
+          <button id="sd_op_takelore" class="menu_button">角色卡 + 世界书</button>
+          <span id="sd_op_takestatus" class="sd-status"></span>
+        </div>
+        <label class="sd-field"><span>角色素材（描述 / 性格 / 场景 / 示例对白）</span>
+          <textarea id="sd_op_source" rows="6" placeholder="点「取角色卡」自动填，也可以自己贴。"></textarea>
+        </label>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">选文风</div>
+        <label class="sd-field"><span>用哪套文风</span>
+          <select id="sd_op_style">
+            <option value="current">当前面板里的文风块</option>
+            <option value="none">不用文风，只写开场白</option>
+          </select>
+        </label>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">选场景</div>
+        <div class="sd-grid2">
+          <label class="sd-field"><span>场景</span>
+            <select id="sd_op_scene">
+              <option value="first">初次见面</option>
+              <option value="known">已经熟识</option>
+              <option value="conflict">冲突之中</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label class="sd-field"><span>生成几条</span>
+            <select id="sd_op_count">
+              <option value="2">2 条</option>
+              <option value="3">3 条</option>
+            </select>
+          </label>
+        </div>
+        <label class="sd-field" id="sd_op_scenecustom_wrap" style="display:none"><span>一句话描述你想开的场景</span>
+          <input id="sd_op_scenecustom" type="text" placeholder="例如：雨夜的便利店，她刚下夜班">
+        </label>
+        <div class="sd-actions">
+          <button id="sd_op_generate" class="menu_button sd-primary">生成开场白</button>
+          <span id="sd_op_status" class="sd-status"></span>
+        </div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">挑一条</div>
+        <div id="sd_op_candidates"></div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">拿走</div>
+        <div class="sd-actions">
+          <button id="sd_op_copy" class="menu_button">复制选中</button>
+          <button id="sd_op_writefirst" class="menu_button">写为第一条开场白</button>
+          <button id="sd_op_writealt" class="menu_button">加为备选开场白</button>
+        </div>
+        <div class="sd-inline">
+          <select id="sd_op_archlist"></select>
+          <button id="sd_op_archload" class="menu_button">载入</button>
+          <button id="sd_op_archdel" class="menu_button">删除</button>
+          <button id="sd_op_archsave" class="menu_button">把选中存进存档</button>
+        </div>
+        <div id="sd_op_wstatus" class="sd-status"></div>
+      </div>
     </div>
 
     <div class="sd-page" id="sd_page_remsg" style="display:none">
@@ -1135,6 +1200,319 @@ async function runRework(force) {
   }
 }
 
+/* ================= 开场白工坊 ================= */
+
+const OPENING_SCENES = {
+  first: '初次见面，双方还不认识',
+  known: '两人已经熟识',
+  conflict: '两人正处于冲突之中'
+};
+const OPENING_ARCHIVE_LIMIT = 20;
+
+function opSceneLabel() {
+  const o = settings().opening;
+  if (o.scene === 'custom') return o.sceneCustom.trim() || '自定义场景';
+  return OPENING_SCENES[o.scene] || o.scene;
+}
+
+function opStyleBlock() {
+  const s = settings();
+  const from = s.opening.styleFrom;
+  if (from === 'none') return '';
+  if (!from || from === 'current') {
+    const panel = el('sd_block') && el('sd_block').value.trim();
+    return panel || String(s.block || '').trim();
+  }
+  const item = (s.styles || []).find((it) => it.id === from);
+  return item && item.data && item.data.block ? String(item.data.block).trim() : '';
+}
+
+function cardCorpus() {
+  const c = ctx();
+  let f = null;
+  try {
+    if (typeof c.getCharacterCardFields === 'function') f = c.getCharacterCardFields();
+    if (!f && c.characters && c.characters[c.characterId]) {
+      const ch = c.characters[c.characterId];
+      f = { description: ch.description, personality: ch.personality, scenario: ch.scenario, mesExamples: ch.mes_example };
+    }
+  } catch (e) {
+    f = null;
+  }
+  if (!f) return null;
+  const parts = [f.description, f.personality, f.scenario, f.mesExamples || f.mes_example || f.exampleMessages]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean);
+  const text = parts.join('\n\n').trim();
+  return text || null;
+}
+
+function opTakeCard() {
+  const text = cardCorpus();
+  if (!text) {
+    setStatus('sd_op_takestatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  settings().opening.source = text;
+  setVal('sd_op_source', text);
+  save();
+  setStatus('sd_op_takestatus', '已取角色卡素材（' + text.length + ' 字），可再增删。', 'ok');
+}
+
+async function opTakeCardWithLore() {
+  const text = cardCorpus();
+  if (!text) {
+    setStatus('sd_op_takestatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  let lore = '';
+  try {
+    const c = ctx();
+    const ch = c.characters && c.characters[c.characterId];
+    const bookName = ch && ch.extensions && ch.extensions.world;
+    if (bookName && typeof c.loadWorldInfo === 'function') {
+      const data = await c.loadWorldInfo(bookName);
+      const entries = Object.values((data && data.entries) || {}).filter((e2) => e2 && e2.content && !e2.disable);
+      lore = entries.map((e2) => String(e2.content).trim()).join('\n\n');
+    }
+  } catch (e) {
+    lore = '';
+  }
+  const full = (text + (lore ? '\n\n' + lore : '')).trim();
+  settings().opening.source = full;
+  setVal('sd_op_source', full);
+  save();
+  setStatus('sd_op_takestatus', '已取角色卡' + (lore ? ' + 世界书' : '（没找到挂载的世界书）') + '（' + full.length + ' 字）。', 'ok');
+}
+
+function opSceneUI() {
+  const wrap = el('sd_op_scenecustom_wrap');
+  if (wrap) wrap.style.display = settings().opening.scene === 'custom' ? '' : 'none';
+}
+
+function renderOpStyleSelect() {
+  const sel = el('sd_op_style');
+  if (!sel) return;
+  const list = settings().styles || [];
+  const keep = settings().opening.styleFrom || 'current';
+  const arch = list
+    .map((it) => '<option value="' + esc(it.id) + '">存档 · ' + esc(it.name) + '</option>')
+    .join('');
+  sel.innerHTML =
+    '<option value="current">当前面板里的文风块</option>' +
+    '<option value="none">不用文风，只写开场白</option>' +
+    (arch || '<option value="" disabled>（还没有文风存档）</option>');
+  const has = keep === 'current' || keep === 'none' || list.some((it) => it.id === keep);
+  sel.value = has ? keep : 'current';
+}
+
+async function runOpenings(force) {
+  const s = settings();
+  s.opening.source = (el('sd_op_source') ? el('sd_op_source').value : s.opening.source).trim();
+  save();
+  if (!s.opening.source) {
+    setStatus('sd_op_status', '先取角色素材。', 'error');
+    return;
+  }
+  if (!lockOr('sd_op_status', 'openings')) return;
+  cancelled = false;
+  setStatus('sd_op_status', '生成中…');
+  el('sd_op_generate').disabled = true;
+  try {
+    const scene = opSceneLabel();
+    const count = Number(s.opening.count) || 2;
+    const block = opStyleBlock();
+    const key = hashKey({ stage: 'openings', source: s.opening.source, scene, count, block });
+    const { data, cached } = await cachedRun(
+      'openings',
+      key,
+      async () => parseJSON(await callModel(Prompts.openings({ source: s.opening.source, styleBlock: block, scene, count }))),
+      force
+    );
+    const list = (Array.isArray(data.openings) ? data.openings : []).map((t) => String(t || '').trim()).filter(Boolean);
+    if (!list.length) throw new Error('模型没返回开场白，重试一次。');
+    s.opening.candidates = list;
+    s.opening.picked = 0;
+    renderOpenings();
+    setStatus('sd_op_status', cached ? '输入没变，用上次结果，未再调用 API。' : '生成好了，挑一条吧。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_op_status', String(e.message || e), 'error');
+  } finally {
+    el('sd_op_generate').disabled = false;
+    busySteps.delete('openings');
+  }
+}
+
+async function runOpeningRewrite(i) {
+  const s = settings();
+  const list = s.opening.candidates || [];
+  if (!list[i]) return;
+  if (!lockOr('sd_op_status', 'openings')) return;
+  cancelled = false;
+  setStatus('sd_op_status', '重写第 ' + (i + 1) + ' 条…');
+  try {
+    const block = opStyleBlock();
+    const scene = opSceneLabel();
+    const out = await callModel(Prompts.rewriteOpening({ source: s.opening.source, styleBlock: block, scene, old: list[i] }));
+    const parsed = parseJSON(out);
+    const text = String(parsed.opening || '').trim();
+    if (!text) throw new Error('返回是空的，再试一次。');
+    s.opening.candidates[i] = text;
+    renderOpenings();
+    setStatus('sd_op_status', '第 ' + (i + 1) + ' 条重写好了。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_op_status', String(e.message || e), 'error');
+  } finally {
+    busySteps.delete('openings');
+  }
+}
+
+function renderOpenings() {
+  const s = settings();
+  const target = el('sd_op_candidates');
+  if (!target) return;
+  const list = s.opening.candidates || [];
+  if (!list.length) {
+    target.innerHTML = '<div class="sd-note">还没有候选。选好场景点上面的「生成开场白」。</div>';
+    return;
+  }
+  target.innerHTML = list
+    .map(
+      (t, i) =>
+        '<div class="sd-open-cand' + (i === s.opening.picked ? ' sd-picked' : '') + '" data-i="' + i + '">' +
+        '<div class="sd-cand-text">' + esc(t) + '</div>' +
+        '<div class="sd-cand-actions">' +
+        '<button class="menu_button sd-op-rew" data-i="' + i + '">重写这一条</button>' +
+        '<button class="menu_button sd-op-use" data-i="' + i + '">就用这条</button>' +
+        '</div></div>'
+    )
+    .join('');
+  target.querySelectorAll('.sd-open-cand').forEach((card) => {
+    const i = Number(card.dataset.i);
+    card.querySelector('.sd-op-rew').addEventListener('click', () => runOpeningRewrite(i));
+    card.querySelector('.sd-op-use').addEventListener('click', () => {
+      settings().opening.picked = i;
+      renderOpenings();
+      setStatus('sd_op_wstatus', '已选中第 ' + (i + 1) + ' 条，可以去「拿走」。', 'ok');
+      save();
+    });
+  });
+}
+
+function opPickedText() {
+  const o = settings().opening;
+  return (o.candidates || [])[o.picked] || '';
+}
+
+async function opWrite(mode) {
+  const c = ctx();
+  const text = opPickedText();
+  if (!text) {
+    setStatus('sd_op_wstatus', '先挑一条开场白。', 'error');
+    return;
+  }
+  const ch = c && c.characters && c.characters[c.characterId];
+  if (!ch) {
+    setStatus('sd_op_wstatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  const where = mode === 'first' ? '第一条开场白（first_mes，会覆盖原来的）' : '备选开场白（alternate_greetings，会追加一条）';
+  if (!window.confirm('把选中的开场白写进角色卡「' + ch.name + '」的\n' + where + '？')) return;
+  if (mode === 'first') {
+    ch.first_mes = text;
+  } else {
+    if (!Array.isArray(ch.alternate_greetings)) ch.alternate_greetings = [];
+    ch.alternate_greetings.push(text);
+  }
+  try {
+    if (typeof c.writeCharacterFields === 'function') {
+      await c.writeCharacterFields(ch.name, mode === 'first' ? { first_mes: text } : { alternate_greetings: ch.alternate_greetings });
+      setStatus('sd_op_wstatus', '已写进「' + ch.name + '」，切换角色或重开对话就能看到。', 'ok');
+    } else {
+      setStatus('sd_op_wstatus', '已写入内存；这版酒馆没有直接保存接口，请到角色管理面板点一次「保存」落盘。', 'ok');
+    }
+  } catch (e) {
+    setStatus('sd_op_wstatus', '写入失败：' + String(e.message || e), 'error');
+  }
+}
+
+function opLabel() {
+  const ch = (() => {
+    try {
+      const c = ctx();
+      return (c.characters && c.characters[c.characterId] && c.characters[c.characterId].name) || '';
+    } catch (e) {
+      return '';
+    }
+  })();
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return (ch ? ch + ' · ' : '') + opSceneLabel() + '（' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + '）';
+}
+
+function renderOpArch(selectedId) {
+  const sel = el('sd_op_archlist');
+  if (!sel) return;
+  const list = settings().opening.archive || [];
+  if (!list.length) {
+    sel.innerHTML = '<option value="">（开场白存档是空的）</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const keep = (selectedId !== undefined ? selectedId : sel.value) || '';
+  sel.innerHTML = list.map((it) => '<option value="' + esc(it.id) + '">' + esc(it.name) + '</option>').join('');
+  if (keep && list.some((it) => it.id === keep)) sel.value = keep;
+}
+
+function opArchiveSave() {
+  const s = settings();
+  const text = opPickedText();
+  if (!text) {
+    setStatus('sd_op_wstatus', '先挑一条开场白。', 'error');
+    return;
+  }
+  if ((s.opening.archive || []).length >= OPENING_ARCHIVE_LIMIT) {
+    setStatus('sd_op_wstatus', '开场白存档满了（' + OPENING_ARCHIVE_LIMIT + ' 条），先删几条。', 'error');
+    return;
+  }
+  const item = { id: 'op_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: opLabel(), text, savedAt: Date.now() };
+  s.opening.archive = (s.opening.archive || []).concat([item]);
+  renderOpArch(item.id);
+  setStatus('sd_op_wstatus', '已存进开场白存档。', 'ok');
+  save();
+}
+
+function opArchiveLoad() {
+  const item = (settings().opening.archive || []).find((it) => it.id === el('sd_op_archlist').value);
+  if (!item) {
+    setStatus('sd_op_wstatus', '先选一条存档。', 'error');
+    return;
+  }
+  settings().opening.candidates = [item.text];
+  settings().opening.picked = 0;
+  renderOpenings();
+  setStatus('sd_op_wstatus', '已载入「' + item.name + '」，可以直接复制或写回。', 'ok');
+  save();
+}
+
+function opArchiveDel() {
+  const s = settings();
+  const id = el('sd_op_archlist').value;
+  const item = (s.opening.archive || []).find((it) => it.id === id);
+  if (!item) {
+    setStatus('sd_op_wstatus', '先选一条存档。', 'error');
+    return;
+  }
+  if (!window.confirm('删除开场白存档「' + item.name + '」？删了就找不回。')) return;
+  s.opening.archive = (s.opening.archive || []).filter((it) => it.id !== item.id);
+  renderOpArch('');
+  setStatus('sd_op_wstatus', '已删除。', 'ok');
+  save();
+}
+
 function slug() {
   const n = (settings().name || '文风').trim();
   return n.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 40) || '文风';
@@ -1445,6 +1823,17 @@ function restoreLayer() {
   try { renderStyles(); } catch (e) { console.warn('[大厨烹饪处] renderStyles', e); }
   try { renderWiList(); } catch (e) { console.warn('[大厨烹饪处] renderWiList', e); }
   try { renderStats(); } catch (e) { console.warn('[大厨烹饪处] renderStats', e); }
+  try {
+    setVal('sd_op_source', s.opening.source || '');
+    setVal('sd_op_style', s.opening.styleFrom || 'current');
+    setVal('sd_op_scene', s.opening.scene || 'first');
+    setVal('sd_op_count', s.opening.count || '2');
+    setVal('sd_op_scenecustom', s.opening.sceneCustom || '');
+  } catch (e) { console.warn('[大厨烹饪处] opening 字段恢复失败', e); }
+  try { opSceneUI(); } catch (e) { console.warn('[大厨烹饪处] opSceneUI', e); }
+  try { renderOpStyleSelect(); } catch (e) { console.warn('[大厨烹饪处] renderOpStyleSelect', e); }
+  try { renderOpenings(); } catch (e) { console.warn('[大厨烹饪处] renderOpenings', e); }
+  try { renderOpArch(); } catch (e) { console.warn('[大厨烹饪处] renderOpArch', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -1719,6 +2108,34 @@ function bindLayer() {
     setStatus('sd_stylestatus', '已删除。', 'ok');
     save();
   });
+
+  /* ---- 开场白工坊 ---- */
+  bind('sd_op_takecard', 'click', opTakeCard);
+  bind('sd_op_takelore', 'click', opTakeCardWithLore);
+  bind('sd_op_source', 'input', (e) => { settings().opening.source = e.target.value; save(); });
+  bind('sd_op_style', 'change', (e) => { settings().opening.styleFrom = e.target.value; save(); });
+  bind('sd_op_scene', 'change', (e) => { settings().opening.scene = e.target.value; save(); opSceneUI(); });
+  bind('sd_op_scenecustom', 'input', (e) => { settings().opening.sceneCustom = e.target.value; save(); });
+  bind('sd_op_count', 'change', (e) => { settings().opening.count = e.target.value; save(); });
+  bind('sd_op_generate', 'click', (e) => runOpenings(forceFromEvent(e)));
+  bind('sd_op_copy', 'click', async () => {
+    const text = opPickedText();
+    if (!text) {
+      setStatus('sd_op_wstatus', '先挑一条开场白。', 'error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus('sd_op_wstatus', '开场白已复制。', 'ok');
+    } catch (err) {
+      setStatus('sd_op_wstatus', '复制失败，请在候选里手动选中复制。', 'error');
+    }
+  });
+  bind('sd_op_writefirst', 'click', () => opWrite('first'));
+  bind('sd_op_writealt', 'click', () => opWrite('alt'));
+  bind('sd_op_archsave', 'click', opArchiveSave);
+  bind('sd_op_archload', 'click', opArchiveLoad);
+  bind('sd_op_archdel', 'click', opArchiveDel);
 
   bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;
