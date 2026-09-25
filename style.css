@@ -22,6 +22,33 @@
   font-weight: 600;
 }
 
+.sd-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 10px;
+  font-size: 0.82em;
+}
+
+.sd-step {
+  opacity: 0.45;
+  white-space: nowrap;
+}
+
+.sd-step.sd-cur {
+  opacity: 1;
+  font-weight: 600;
+}
+
+.sd-step.sd-done {
+  opacity: 0.8;
+}
+
+.sd-step.sd-done::after {
+  content: ' ✓';
+  opacity: 0.7;
+}
+
 .sd-root .sd-note {
   font-size: 0.85em;
   opacity: 0.75;

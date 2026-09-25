@@ -70,6 +70,14 @@ const panelTpl = `
     </div>
 
     <div class="sd-page" id="sd_page_distill">
+    <div class="sd-steps" id="sd_steps">
+      <span class="sd-step" data-s="1">① 喂料</span>
+      <span class="sd-step" data-s="2">② 读解</span>
+      <span class="sd-step" data-s="3">③ 定信念</span>
+      <span class="sd-step" data-s="4">④ 成块</span>
+      <span class="sd-step" data-s="5">⑤ 试写</span>
+      <span class="sd-step" data-s="6">⑥ 拿走</span>
+    </div>
     <div class="sd-sec">
       <div class="sd-sec-title">生成方式</div>
       <label class="sd-field"><span>用哪个模型</span>
@@ -101,7 +109,7 @@ const panelTpl = `
       </div>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="1">
       <div class="sd-sec-title">喂料</div>
       <div class="sd-grid2">
         <label class="sd-field"><span>来源</span>
@@ -138,17 +146,19 @@ const panelTpl = `
       </div>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="2">
       <div class="sd-sec-title">前三遍读<span class="sd-hint">点某一层的「重蒸」只重读那一层</span></div>
       <div id="sd_readout" class="sd-readout"></div>
     </div>
 
+    <div data-wiz="2">
     <div class="sd-sec" id="sd_uncertain_wrap" style="display:none">
       <div class="sd-sec-title">卡点·拿不准<span class="sd-hint">模型不敢定的，你定夺后再成块</span></div>
       <div id="sd_uncertain" class="sd-cards"></div>
     </div>
+    </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="3">
       <div class="sd-sec-title">卡点·信念<span class="sd-hint">选 / 驳 / 修，没有你确认不进下一步</span></div>
       <div id="sd_beliefs" class="sd-cards"></div>
       <div class="sd-actions">
@@ -157,7 +167,7 @@ const panelTpl = `
       </div>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="4">
       <div class="sd-sec-title">卡点·反例<span class="sd-hint">至少 6 条，最锋利的由你补</span></div>
       <div id="sd_position" class="sd-readout"></div>
       <div id="sd_blacklist" class="sd-cards"></div>
@@ -171,12 +181,12 @@ const panelTpl = `
       </div>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="4">
       <div class="sd-sec-title">文风块<span class="sd-hint">可手改</span></div>
       <textarea id="sd_block" rows="10" placeholder="文风块会出现在这里。"></textarea>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="5">
       <div class="sd-sec-title">测试门<span class="sd-hint">默认 AI 腔让它改写，你判像不像</span></div>
       <div class="sd-grid2">
         <label class="sd-field"><span>默认 AI 腔</span><textarea id="sd_passage" rows="5"></textarea></label>
@@ -190,7 +200,7 @@ const panelTpl = `
       </div>
     </div>
 
-    <div class="sd-sec">
+    <div class="sd-sec" data-wiz="6">
       <div class="sd-sec-title">拿走</div>
       <label class="sd-field"><span>玩法备注（可选，不并入文风）</span>
         <select id="sd_play">
@@ -887,6 +897,7 @@ async function runRead1(force) {
     } else {
       setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '前三遍读完了，去确认信念。', 'ok');
     }
+    updateWizard();
     save();
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
@@ -948,6 +959,7 @@ async function runRead2(force) {
     renderReadout(el('sd_position'), data);
     renderBlacklist();
     setStatus('sd_status2', cached ? '输入没变，用上次结果，未再调用 API。' : '后三遍读完了，去补最锋利的反例。', 'ok');
+    updateWizard();
     save();
   } catch (e) {
     setStatus('sd_status2', String(e.message || e), 'error');
@@ -996,6 +1008,7 @@ async function runCompose(force) {
     s.block = data;
     el('sd_block').value = s.block;
     setStatus('sd_status3', cached ? '输入没变，用上次结果，未再调用 API。' : '成块了。', 'ok');
+    updateWizard();
     save();
   } catch (e) {
     setStatus('sd_status3', String(e.message || e), 'error');
@@ -1282,8 +1295,34 @@ function renderStyles(selectedId) {
   if (keep && list.some((it) => it.id === keep)) sel.value = keep;
 }
 
-// 占位：地基②会实现真正的向导式步骤逻辑
-function updateWizard() {}
+function wizardState() {
+  const s = settings();
+  const has1 = !!s.read1;
+  const has2 = !!s.read2;
+  const hasBlock = !!(s.block && String(s.block).trim());
+  const maxVisible = hasBlock ? 6 : has2 ? 4 : has1 ? 3 : 1;
+  const current = !has1 ? 1 : !has2 ? 3 : !hasBlock ? 4 : 5;
+  return { maxVisible, current };
+}
+
+// 向导式渐进显示：只露出现阶段该看的区块；完成的步骤变淡
+function updateWizard() {
+  const s = settings();
+  const { maxVisible, current } = wizardState();
+  document.querySelectorAll('#sd_page_distill [data-wiz]').forEach((wrap) => {
+    const w = Number(wrap.dataset.wiz);
+    if (Number.isFinite(w)) wrap.style.display = w <= maxVisible ? '' : 'none';
+  });
+  document.querySelectorAll('#sd_steps .sd-step').forEach((st) => {
+    const n = Number(st.dataset.s);
+    st.classList.toggle('sd-done', n < current);
+    st.classList.toggle('sd-cur', n === current);
+  });
+  // 「一次读完」模式下后三遍已随读解一并给出、第 4 步自动解锁，
+  // 不再强制点「确认信念」；按钮保留，改完信念仍可手动重跑（输入没变就走缓存）。
+  const btn2 = el('sd_read2');
+  if (btn2 && s.thrifty && s.read2) btn2.title = '一次读完时结果已带上；改过信念再点可按新信念重跑';
+}
 
 function applyModule() {
   const s = settings();
