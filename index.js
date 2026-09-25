@@ -43,7 +43,7 @@ const settingsTpl = `
   <div class="inline-drawer-content">
     <div class="sd-note">采料、慢炖、出锅：语料进，文风块出。文风块可填进预设的一条 prompt，或世界书的一条 entry。</div>
     <div class="sd-note">打开方式：点输入框右侧的「魔法棒」按钮，在菜单里选<b>大厨烹饪处</b>。本会话已调用模型 <b id="sd_stats_root">0 次</b>。</div>
-    <div class="sd-note">省 API：同样的输入只用调一次；面板里默认开着「省流」，七遍读只花一次调用；面板顶部会显示命中缓存省下的次数。</div>
+    <div class="sd-note">省 API：同样的输入只用调一次；面板里默认开着「一次读完」，全部读解只花一次调用；面板顶部会显示命中缓存省下的次数。</div>
   </div>
 </div>`;
 
@@ -134,32 +134,32 @@ const panelTpl = `
         <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
         <span id="sd_corpus_stat" class="sd-corpus-stat"></span>
       </label>
-      <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>省流：六遍读合并成一次调用（少花一半调用，分析略粗）</span></label>
+      <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>一次读完（推荐）：全部读解合并成一次调用（少花一半调用，分析略粗）</span></label>
       <div class="sd-inline">
         <button id="sd_takecard" class="menu_button">取角色卡</button>
         <button id="sd_takechat" class="menu_button">取聊天</button>
         <span id="sd_takestatus" class="sd-status"></span>
       </div>
       <div class="sd-actions">
-        <button id="sd_read1" class="menu_button">开始六遍读</button>
+        <button id="sd_read1" class="menu_button sd-primary">开始读解</button>
         <span id="sd_status1" class="sd-status"></span>
       </div>
     </div>
 
     <div class="sd-sec" data-wiz="2">
-      <div class="sd-sec-title">前三遍读<span class="sd-hint">点某一层的「重蒸」只重读那一层</span></div>
+      <div class="sd-sec-title">读解<span class="sd-hint">点某一层的「重读」只重读那一层</span></div>
       <div id="sd_readout" class="sd-readout"></div>
     </div>
 
     <div data-wiz="2">
     <div class="sd-sec" id="sd_uncertain_wrap" style="display:none">
-      <div class="sd-sec-title">卡点·拿不准<span class="sd-hint">模型不敢定的，你定夺后再成块</span></div>
+      <div class="sd-sec-title">请你定夺<span class="sd-hint">模型不敢定的，你定夺后再成块</span></div>
       <div id="sd_uncertain" class="sd-cards"></div>
     </div>
     </div>
 
     <div class="sd-sec" data-wiz="3">
-      <div class="sd-sec-title">卡点·信念<span class="sd-hint">选 / 驳 / 修，没有你确认不进下一步</span></div>
+      <div class="sd-sec-title">第 3 步 · 定信念<span class="sd-hint">选 / 驳 / 修，没有你确认不进下一步</span></div>
       <div id="sd_beliefs" class="sd-cards"></div>
       <div class="sd-actions">
         <button id="sd_read2" class="menu_button">确认信念，读后三遍</button>
@@ -168,7 +168,7 @@ const panelTpl = `
     </div>
 
     <div class="sd-sec" data-wiz="4">
-      <div class="sd-sec-title">卡点·反例<span class="sd-hint">至少 6 条，最锋利的由你补</span></div>
+      <div class="sd-sec-title">第 4 步 · 禁忌清单<span class="sd-hint">至少 6 条，最锋利的由你补</span></div>
       <div id="sd_position" class="sd-readout"></div>
       <div id="sd_blacklist" class="sd-cards"></div>
       <div class="sd-inline">
@@ -187,15 +187,15 @@ const panelTpl = `
     </div>
 
     <div class="sd-sec" data-wiz="5">
-      <div class="sd-sec-title">测试门<span class="sd-hint">默认 AI 腔让它改写，你判像不像</span></div>
+      <div class="sd-sec-title">试写检验<span class="sd-hint">默认 AI 腔让它改写，你判像不像</span></div>
       <div class="sd-grid2">
         <label class="sd-field"><span>默认 AI 腔</span><textarea id="sd_passage" rows="5"></textarea></label>
         <label class="sd-field"><span>改写结果</span><textarea id="sd_rewrite" rows="5"></textarea></label>
       </div>
       <div class="sd-actions">
         <button id="sd_dorewrite" class="menu_button">用文风改写</button>
-        <button id="sd_like" class="menu_button">像</button>
-        <button id="sd_unlike" class="menu_button" title="判为不像会自动回炉重修文风块">不像（差就差到你满意）</button>
+        <button id="sd_like" class="menu_button">像，通过</button>
+        <button id="sd_unlike" class="menu_button" title="判为不像会自动修订文风块">不像，自动修块</button>
         <span id="sd_status4" class="sd-status"></span>
       </div>
     </div>
@@ -211,8 +211,8 @@ const panelTpl = `
         </select>
       </label>
       <div class="sd-inline">
-        <input id="sd_stylename" type="text" placeholder="存档名（默认用文风名）">
-        <button id="sd_stylesave" class="menu_button">存为存档</button>
+        <input id="sd_stylename" type="text" placeholder="文风存档名（默认用文风名）">
+        <button id="sd_stylesave" class="menu_button">存入文风存档</button>
       </div>
       <div class="sd-inline">
         <select id="sd_stylelist"></select>
@@ -651,33 +651,52 @@ function updateMode() {
 }
 
 function readoutRow(label, value, layer) {
+  return '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(value) + '</div>';
+}
+
+const LAYER_FIELDS = {
+  syntax: [['vocab', '词汇偏好'], ['sentence', '句长分布'], ['rhythm', '节奏'], ['punctuation', '标点习惯'], ['register', '口语/书面比例']],
+  object: [['writes', '写谁'], ['notWrites', '不写谁'], ['listener', '隐含听众']],
+  attitude: [['tragedy', '对悲剧'], ['comedy', '对喜剧'], ['intimacy', '对亲密'], ['failure', '对失败'], ['time', '对时代']]
+};
+
+function layerCard(title, data, fields, layer) {
+  const rows = fields
+    .filter(([k]) => data[k])
+    .map(([k, label]) => '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(data[k]) + '</div>')
+    .join('');
+  if (!rows) return '';
   const btn = layer
-    ? ' <button class="sd-refresh menu_button" data-layer="' + esc(layer) + '" title="只重蒸这一层">重蒸</button>'
+    ? ' <button class="sd-refresh menu_button" data-layer="' + esc(layer) + '" title="只重读这一层">重读</button>'
     : '';
-  return '<div class="sd-row"><b>' + esc(label) + '</b> ' + esc(value) + btn + '</div>';
+  return '<div class="sd-layer"><div class="sd-layer-title">' + esc(title) + btn + '</div>' + rows + '</div>';
+}
+
+function layerListCard(title, list, layer) {
+  const rows = (Array.isArray(list) ? list : [list]).filter(Boolean).map((v) => '<div class="sd-row">' + esc(v) + '</div>').join('');
+  if (!rows) return '';
+  const btn = layer
+    ? ' <button class="sd-refresh menu_button" data-layer="' + esc(layer) + '" title="只重读这一层">重读</button>'
+    : '';
+  return '<div class="sd-layer"><div class="sd-layer-title">' + esc(title) + btn + '</div>' + rows + '</div>';
 }
 
 function renderReadout(target, data) {
   const parts = [];
-  if (data.syntax) {
-    const s = data.syntax;
-    parts.push(readoutRow('句法', [s.vocab, s.sentence, s.rhythm, s.punctuation, s.register].filter(Boolean).join('；'), 'syntax'));
+  if (data.syntax) parts.push(layerCard('句法', data.syntax, LAYER_FIELDS.syntax, 'syntax'));
+  if (data.object) parts.push(layerCard('对象', data.object, LAYER_FIELDS.object, 'object'));
+  if (data.attitude) parts.push(layerCard('态度', data.attitude, LAYER_FIELDS.attitude, 'attitude'));
+  if (data.rhetoric && (Array.isArray(data.rhetoric) ? data.rhetoric.length : data.rhetoric)) {
+    parts.push(layerListCard('修辞', data.rhetoric, 'rhetoric'));
   }
-  if (data.object) {
-    const o = data.object;
-    parts.push(readoutRow('对象', [o.writes, o.notWrites, o.listener].filter(Boolean).join('；'), 'object'));
-  }
-  if (data.attitude) {
-    const a = data.attitude;
-    parts.push(readoutRow('态度', [a.tragedy, a.comedy, a.intimacy, a.failure, a.time].filter(Boolean).join('；'), 'attitude'));
-  }
-  if (data.rhetoric) parts.push(readoutRow('修辞', (data.rhetoric || []).join('；'), 'rhetoric'));
   if (data.belief_core) parts.push(readoutRow('核心信念', data.belief_core));
   if (data.position) parts.push(readoutRow('历史定位', data.position));
-  if (data.neighbor_diff) parts.push(readoutRow('跟邻居的界', data.neighbor_diff));
+  if (data.neighbor_diff) parts.push(readoutRow('和相近文风的区别', data.neighbor_diff));
   if (data.draft) {
     parts.push(readoutRow('参考草稿', data.draft.draft || ''));
-    parts.push(readoutRow('拿不准', (data.draft.uncertain || []).join('；')));
+    if (data.draft.uncertain && data.draft.uncertain.length) {
+      parts.push(layerListCard('请你定夺', data.draft.uncertain));
+    }
   }
   if (target) target.innerHTML = parts.join('') || '<div class="sd-row sd-muted">没有结果。</div>';
 }
@@ -840,7 +859,7 @@ async function runRead1(force) {
   }
   if (!lockOr('sd_status1')) return;
   cancelled = false;
-  setStatus('sd_status1', s.thrifty ? '七遍一起读…' : '读前三遍…');
+  setStatus('sd_status1', s.thrifty ? '一次读完…' : '读解中…');
   el('sd_read1').disabled = true;
   try {
     const thrifty = !!s.thrifty;
@@ -893,9 +912,9 @@ async function runRead1(force) {
       pushCache('read2', hashKey({ corpus: s.corpus, genre: s.genre, beliefs: selectedBeliefs() }), s.read2);
       renderReadout(el('sd_position'), s.read2);
       renderBlacklist();
-      setStatus('sd_status1', cached ? '省流结果命中缓存，未再调用 API。' : '七遍一次读完，信念确认一下就能成块。', 'ok');
+      setStatus('sd_status1', cached ? '一次读完命中缓存，未再调用 API。' : '读解完成，直接就能成块；想细调信念也行。', 'ok');
     } else {
-      setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '前三遍读完了，去确认信念。', 'ok');
+      setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '读解完成，去确认信念。', 'ok');
     }
     updateWizard();
     save();
@@ -915,7 +934,7 @@ async function runRefineLayer(layer) {
   }
   if (!lockOr('sd_status1')) return;
   cancelled = false;
-  setStatus('sd_status1', '重蒸「' + (Prompts.LAYERS[layer] || layer) + '」…');
+  setStatus('sd_status1', '重读「' + (Prompts.LAYERS[layer] || layer) + '」…');
   try {
     const current = s.read1[layer];
     const out = await callModel(Prompts.refineLayer({ layer, current, corpus: s.corpus, genre: s.genre }));
@@ -923,10 +942,10 @@ async function runRefineLayer(layer) {
     if (parsed && parsed.value !== undefined) {
       s.read1[layer] = parsed.value;
       renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.source === 'reference' ? s.draft : null }));
-      setStatus('sd_status1', '「' + (Prompts.LAYERS[layer] || layer) + '」重蒸好了。', 'ok');
+      setStatus('sd_status1', '「' + (Prompts.LAYERS[layer] || layer) + '」重读好了。', 'ok');
       save();
     } else {
-      setStatus('sd_status1', '重蒸返回格式不对，再试一次。', 'error');
+      setStatus('sd_status1', '重读返回格式不对，再试一次。', 'error');
     }
   } catch (e) {
     setStatus('sd_status1', String(e.message || e), 'error');
@@ -972,7 +991,7 @@ async function runRead2(force) {
 async function runCompose(force) {
   const s = settings();
   if (!s.read1 || !s.read2) {
-    setStatus('sd_status3', '先把六遍读完。', 'error');
+    setStatus('sd_status3', '先把读解做完。', 'error');
     return;
   }
   if (!lockOr('sd_status3')) return;
@@ -1075,7 +1094,7 @@ async function runRework(force) {
   }
   if (!lockOr('sd_status4')) return;
   cancelled = false;
-  setStatus('sd_status4', '不像，回炉重修…');
+  setStatus('sd_status4', '不像，自动修块…');
   el('sd_unlike').disabled = true;
   try {
     const key = hashKey({ stage: 'rework', block: s.block, passage, bad });
@@ -1092,7 +1111,7 @@ async function runRework(force) {
     );
     s.block = data;
     el('sd_block').value = s.block;
-    setStatus('sd_status4', '回炉好了，再拿一段测。', 'ok');
+    setStatus('sd_status4', '修好了，再拿一段测。', 'ok');
     save();
   } catch (e) {
     setStatus('sd_status4', String(e.message || e), 'error');
@@ -1285,7 +1304,7 @@ function renderStyles(selectedId) {
   if (!sel) return;
   const list = settings().styles || [];
   if (!list.length) {
-    sel.innerHTML = '<option value="">（还没有存档）</option>';
+    sel.innerHTML = '<option value="">（还没有文风存档）</option>';
     sel.disabled = true;
     return;
   }
@@ -1620,7 +1639,7 @@ function bindLayer() {
   el('sd_stylesave').addEventListener('click', () => {
     const s = settings();
     if ((s.styles || []).length >= STYLE_LIMIT) {
-      setStatus('sd_stylestatus', '存档满了（' + STYLE_LIMIT + ' 份），先删几份。', 'error');
+      setStatus('sd_stylestatus', '文风存档满了（' + STYLE_LIMIT + ' 份），先删几份。', 'error');
       return;
     }
     const name = el('sd_stylename').value.trim() || s.name.trim() || '未命名文风';
