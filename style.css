@@ -251,6 +251,8 @@
 .sd-panel .menu_button,
 .sd-root .menu_button {
   transition: filter 0.15s ease, transform 0.05s ease, opacity 0.15s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .sd-panel .menu_button:hover,
@@ -269,6 +271,12 @@
 }
 
 .sd-panel .menu_button.sd-primary:hover { filter: brightness(1.1); }
+
+/* 次要但会改变状态的操作（像/不像、确认信念等）：给个实底，字更清楚 */
+.sd-panel .menu_button:not(.sd-primary) {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
 
 /* 「像，通过」的完成态 */
 .menu_button.sd-done-flash {

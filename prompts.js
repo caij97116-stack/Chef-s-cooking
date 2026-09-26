@@ -17,7 +17,10 @@ export const LAYERS = {
 const SYS_ANALYST = "你是大厨烹饪处。你只做分析、不下最终结论，并且只输出 JSON。";
 const SYS_JSON = "你是大厨烹饪处。你只输出 JSON。";
 
-export function read1({ corpus, genre }) {
+const DEEP_HINT = `
+【提醒】这是作者自己写的文字，作者本人未必能准确说出自己的习惯——请挖掘反复出现、但她可能没有意识到的模式，不要只重复她大概会怎么自我描述的表面说法。`;
+
+export function read1({ corpus, genre, deep }) {
   return [
     { role: "system", content: SYS_ANALYST },
     {
@@ -26,6 +29,7 @@ export function read1({ corpus, genre }) {
 
 【语料】
 ${corpus}
+${deep ? DEEP_HINT : ''}
 
 读这段语料的前三遍：
 1. 句法层：词汇偏好、句长分布、节奏、标点习惯、语体混合比。
@@ -50,7 +54,7 @@ ${corpus}
   ];
 }
 
-export function readAll({ corpus, genre }) {
+export function readAll({ corpus, genre, deep }) {
   return [
     { role: "system", content: SYS_ANALYST },
     {
@@ -59,6 +63,7 @@ export function readAll({ corpus, genre }) {
 
 【语料】
 ${corpus}
+${deep ? DEEP_HINT : ''}
 
 把下面七遍读一次性读完，只输出 JSON。
 
@@ -77,6 +82,83 @@ ${corpus}
 - 给 2-3 个“信念候选”——belief（一句话）、evidence（引原句）、counter（她绝不会写的反例）。
 - 剪 2-3 段最能代表她句法的原句放进 samples，可把专名换成占位符，句法不要动。
 - 给一篇“能贴的草稿”和一份“拿不准清单”（3-6 条）。
+
+只输出 JSON：
+{"syntax":{"vocab":"","sentence":"","rhythm":"","punctuation":"","register":""},
+ "object":{"writes":"","notWrites":"","listener":""},
+ "attitude":{"tragedy":"","comedy":"","intimacy":"","failure":"","time":""},
+ "rhetoric":["",""],
+ "samples":["",""],
+ "beliefs":[{"belief":"","evidence":"","counter":""}],
+ "draft":{"draft":"","uncertain":["",""]},
+ "position":"","neighbor_diff":"","blacklist":[{"text":"","kind":"手法|情绪|用词"}],"belief_core":""}`
+    }
+  ];
+}
+
+// ---------- 来源 = 自己写的文风指令（规则，不是范文）----------
+// 这里没有原文可"读"，需要先理解指令想要什么效果，再推演一段照此指令写作会呈现的样子。
+const RULE_PREAMBLE = ({ instruction, notes, genre }) => `【体裁】${genreLabel(genre)}
+
+【用户写的文风指令（这是规则/要求，不是现成的范文）】
+${instruction}
+${notes && notes.trim() ? `\n【用户补充的说明 / 可参考的文案】\n${notes}\n` : ''}
+这是用户对文风的规则，不是已经写好的文字。请先仔细理解这份指令想让文字呈现出什么效果，再推演：如果一段文字严格遵照这份指令写成，会是什么样子。不要反问用户，直接推演。`;
+
+export function ruleRead1({ instruction, notes, genre }) {
+  return [
+    { role: "system", content: SYS_ANALYST },
+    {
+      role: "user",
+      content: `${RULE_PREAMBLE({ instruction, notes, genre })}
+
+按指令推演前三层：
+1. 句法层：词汇偏好、句长分布、节奏、标点习惯、语体混合比。
+2. 对象层：写谁、不写谁、隐含听众是谁。
+3. 态度层：对悲剧/喜剧/历史/亲密/失败/时代的态度会怎样体现。
+4. 修辞习惯：按指令推断会爱用比喻还是列数字，可能反复出现的 moves。
+
+然后：
+- 给 2-3 个“信念候选”——照这份指令写作时，心里那个不允许自己偏离的东西。每条配 belief（一句话）、evidence（引指令里的原句或说明理由）、counter（绝不会写的反例）。
+- 没有原文可剪，请按指令自己写 2-3 段示范句子放进 samples（这是你写的示范，不是引用），句法上要体现指令要求。
+- 顺带按指令写一篇“能贴的草稿”，并给一份“拿不准清单”：列 3-6 条你在理解这份指令时吃不准该怎么把握的地方，交给用户定夺。
+
+只输出 JSON：
+{"syntax":{"vocab":"","sentence":"","rhythm":"","punctuation":"","register":""},
+ "object":{"writes":"","notWrites":"","listener":""},
+ "attitude":{"tragedy":"","comedy":"","intimacy":"","failure":"","time":""},
+ "rhetoric":["",""],
+ "samples":["",""],
+ "beliefs":[{"belief":"","evidence":"","counter":""}],
+ "draft":{"draft":"","uncertain":["",""]}}`
+    }
+  ];
+}
+
+export function ruleReadAll({ instruction, notes, genre }) {
+  return [
+    { role: "system", content: SYS_ANALYST },
+    {
+      role: "user",
+      content: `${RULE_PREAMBLE({ instruction, notes, genre })}
+
+把下面七步一次性推演完，只输出 JSON。
+
+前三步：
+1. 句法层：词汇偏好、句长分布、节奏、标点习惯、语体混合比。
+2. 对象层：写谁、不写谁、隐含听众是谁。
+3. 态度层：对悲剧/喜剧/历史/亲密/失败/时代的态度会怎样体现。
+4. 修辞习惯：按指令推断会爱用比喻还是列数字，可能反复出现的 moves。
+
+后三步：
+5. 历史定位：这份指令更接近哪一路写作传统，和哪个表面相似但不同的路子划清界限。
+6. 黑名单：照此指令绝不会用的手法、绝不会写的情绪。至少 6 条，每条给 kind（手法 / 情绪 / 用词 三选一）。
+7. 核心信念压缩：一句话。
+
+另外：
+- 给 2-3 个“信念候选”——belief（一句话）、evidence（引指令原句或说明理由）、counter（绝不会写的反例）。
+- 没有原文可剪，请按指令自己写 2-3 段示范句子放进 samples（标注为示范，不是引用）。
+- 按指令写一篇“能贴的草稿”，并给一份“拿不准清单”（3-6 条，列你理解指令时吃不准的地方）。
 
 只输出 JSON：
 {"syntax":{"vocab":"","sentence":"","rhythm":"","punctuation":"","register":""},

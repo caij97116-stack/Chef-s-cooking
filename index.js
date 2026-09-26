@@ -11,7 +11,8 @@ const defaultSettings = Object.freeze({
   stream: false,
   model: '',
   temperature: 0.7,
-  source: 'mine',
+  source: 'own',
+  styleNotes: '',
   genre: 'narration',
   name: '',
   corpus: '',
@@ -117,8 +118,9 @@ const panelTpl = `
       <div class="sd-grid2">
         <label class="sd-field"><span>来源</span>
           <select id="sd_source">
-            <option value="mine">我的文字（只出条目，等你点）</option>
-            <option value="reference">参考文字（另出可贴草稿 + 拿不准清单）</option>
+            <option value="rule">自己写的文风指令（规则，不是范文）</option>
+            <option value="own">自己写的正文</option>
+            <option value="ref">别人贴的素材（参考文字）</option>
           </select>
         </label>
         <label class="sd-field"><span>体裁</span>
@@ -133,10 +135,15 @@ const panelTpl = `
       <label class="sd-field"><span>名字</span>
         <input id="sd_name" type="text" placeholder="例如：冷硬短句 · 身体叙事">
       </label>
-      <label class="sd-field"><span>语料</span>
+      <label class="sd-field"><span id="sd_corpus_label">语料</span>
         <textarea id="sd_corpus" rows="6" placeholder="同一体裁的原文，段落之间空一行。"></textarea>
         <span id="sd_corpus_stat" class="sd-corpus-stat"></span>
       </label>
+      <div id="sd_rulenotes_wrap" style="display:none">
+        <label class="sd-field"><span>补充说明 / 可参考的文案</span>
+          <textarea id="sd_rulenotes" rows="4" placeholder="可以写这条规则想达到什么效果、举个例子、或贴一段你觉得贴近的文案，不写也可以。"></textarea>
+        </label>
+      </div>
       <label class="sd-check"><input id="sd_thrifty" type="checkbox"> <span>一次读完（推荐）：全部读解合并成一次调用（少花一半调用，分析略粗）</span></label>
       <div class="sd-inline">
         <button id="sd_takecard" class="menu_button">取角色卡</button>
@@ -406,6 +413,12 @@ function ctx() {
   throw new Error('SillyTavern.getContext 不可用，请确认酒馆版本 ≥ 1.16 且扩展已启用');
 }
 
+function normalizeSource(v) {
+  if (v === 'mine') return 'own';
+  if (v === 'reference') return 'ref';
+  return v === 'rule' || v === 'own' || v === 'ref' ? v : 'own';
+}
+
 function settings() {
   const { extensionSettings } = ctx();
   if (!extensionSettings[MODULE_NAME]) {
@@ -418,6 +431,9 @@ function settings() {
   if (!s.stats) s.stats = { calls: 0, tokens: 0, saved: 0 };
   if (s.stats.saved == null) s.stats.saved = 0;
   if (!s.cache) s.cache = {};
+  // 旧版只有 我的文字(mine)/参考文字(reference) 两档，迁移成新的三档
+  s.source = normalizeSource(s.source);
+  if (s.styleNotes == null) s.styleNotes = '';
   return s;
 }
 
@@ -540,6 +556,20 @@ function estimateTokens(text) {
   const cjk = (String(text).match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
   const other = Math.max(0, String(text).length - cjk);
   return Math.round(cjk * 0.9 + other / 4);
+}
+
+function updateSourceUI() {
+  const sel = el('sd_source');
+  const src = sel ? sel.value : 'own';
+  const label = el('sd_corpus_label');
+  const corpus = el('sd_corpus');
+  const notesWrap = el('sd_rulenotes_wrap');
+  const isRule = src === 'rule';
+  if (label) label.textContent = isRule ? '文风指令' : '语料';
+  if (corpus) corpus.placeholder = isRule
+    ? '写下你对文风的要求/规则，比如：多用短句、避免比喻、第一人称、克制煽情……'
+    : '同一体裁的原文，段落之间空一行。';
+  if (notesWrap) notesWrap.style.display = isRule ? '' : 'none';
 }
 
 function renderCorpusStat() {
@@ -1001,13 +1031,16 @@ function selectedRulings() {
 
 async function runRead1(force) {
   const s = settings();
-  s.source = el('sd_source').value;
+  s.source = normalizeSource(el('sd_source').value);
   s.genre = el('sd_genre').value;
   s.name = el('sd_name').value.trim();
   s.corpus = el('sd_corpus').value.trim();
+  s.styleNotes = (el('sd_rulenotes') && el('sd_rulenotes').value.trim()) || '';
   save();
+  const isRule = s.source === 'rule';
+  const deep = s.source === 'own';
   if (!s.corpus) {
-    setStatus('sd_status1', '先贴语料。', 'error');
+    setStatus('sd_status1', isRule ? '先写文风指令。' : '先贴语料。', 'error');
     return;
   }
   if (!lockOr('sd_status1', 'read1')) return;
@@ -1016,16 +1049,24 @@ async function runRead1(force) {
   el('sd_read1').disabled = true;
   try {
     const thrifty = !!s.thrifty;
-    const key = hashKey(thrifty ? { all: true, corpus: s.corpus, genre: s.genre } : { corpus: s.corpus, genre: s.genre });
+    const key = hashKey(
+      isRule
+        ? { rule: true, all: thrifty, instruction: s.corpus, notes: s.styleNotes, genre: s.genre }
+        : { all: thrifty, corpus: s.corpus, genre: s.genre, deep }
+    );
     const { data, cached } = await cachedRun(
       thrifty ? 'readall' : 'read1',
       key,
       async () =>
         parseJSON(
           await callModel(
-            thrifty
-              ? Prompts.readAll({ corpus: s.corpus, genre: s.genre })
-              : Prompts.read1({ corpus: s.corpus, genre: s.genre })
+            isRule
+              ? (thrifty
+                  ? Prompts.ruleReadAll({ instruction: s.corpus, notes: s.styleNotes, genre: s.genre })
+                  : Prompts.ruleRead1({ instruction: s.corpus, notes: s.styleNotes, genre: s.genre }))
+              : (thrifty
+                  ? Prompts.readAll({ corpus: s.corpus, genre: s.genre, deep })
+                  : Prompts.read1({ corpus: s.corpus, genre: s.genre, deep }))
           )
         ),
       force
@@ -1046,12 +1087,12 @@ async function runRead1(force) {
       counter: b.counter || '',
       on: true
     }));
-    s.uncertain = (s.source === 'reference' && data.draft && Array.isArray(data.draft.uncertain) ? data.draft.uncertain : []).map((q) => ({
+    // 三档现在都可能给"拿不准清单"——模型给了才展示，不再按来源写死。
+    s.uncertain = (data.draft && Array.isArray(data.draft.uncertain) ? data.draft.uncertain : []).map((q) => ({
       q: String(q),
       ruling: ''
     }));
-    const shownDraft = s.source === 'reference' ? s.draft : null;
-    renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: shownDraft }));
+    renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
     renderBeliefs();
     renderUncertain();
     if (thrifty) {
@@ -1094,7 +1135,7 @@ async function runRefineLayer(layer) {
     const parsed = parseJSON(out);
     if (parsed && parsed.value !== undefined) {
       s.read1[layer] = parsed.value;
-      renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.source === 'reference' ? s.draft : null }));
+      renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
       setStatus('sd_status1', '「' + (Prompts.LAYERS[layer] || layer) + '」重读好了。', 'ok');
       save();
     } else {
@@ -1141,52 +1182,61 @@ async function runRead2(force) {
   }
 }
 
-async function runCompose(force) {
+// 压成文风块：不再调用模型。前面几步（读解/定信念/黑名单/拿不准）已经让用户确认过了，
+// 这里只是把已经确定的结论按固定格式拼起来，属于本地格式化，不产生新的 API 调用。
+function composeLocally({ name, genre, read1, read2, samples, blacklist, rulings }) {
+  const syntax = (read1 && read1.syntax) || {};
+  const title = `# ${name && name.trim() ? name.trim() : '未命名文风'} · ${Prompts.genreLabel(genre)}`;
+  const core = (read2 && read2.belief_core && read2.belief_core.trim()) || '（核心信念缺失，回第 3 步补）';
+  const beliefsLine =
+    ((read1 && read1.beliefs) || [])
+      .map((b) => b && b.belief)
+      .filter(Boolean)
+      .join('；') || core;
+  const syntaxLine = [syntax.vocab, syntax.sentence, syntax.rhythm, syntax.punctuation, syntax.register].filter(Boolean).join('；') || '（句法信息缺失）';
+  const rhetoricLine = ((read1 && read1.rhetoric) || []).filter(Boolean).join('；') || '（无特别记录）';
+  const neighborLine = (read2 && read2.neighbor_diff && read2.neighbor_diff.trim()) || '（未记录）';
+  const blkSource = blacklist && blacklist.length ? blacklist : ((read2 && read2.blacklist) || []).map((b) => b && b.text).filter(Boolean);
+  const blacklistLines = blkSource.length ? blkSource.map((t) => `- ${t}`).join('\n') : '- （禁忌清单为空，回第 4 步至少补 6 条）';
+  const sampleText = samples && samples.length ? samples.join('\n\n') : '样本缺失';
+  const rulingsBlock = rulings && rulings.trim() ? `\n\n（拿不准的地方，已按你的决定处理：\n${rulings}）` : '';
+  return `${title}
+> ${core}
+信念：${beliefsLine}
+句法纪律：${syntaxLine}
+修辞习惯：${rhetoricLine}
+跟邻居的界：${neighborLine}
+反例（绝不写）：
+${blacklistLines}
+样本：
+${sampleText}${rulingsBlock}`;
+}
+
+function runCompose() {
   const s = settings();
   if (!s.read1 || !s.read2) {
     setStatus('sd_status3', '先把读解做完。', 'error');
     return;
   }
-  if (!lockOr('sd_status3', 'compose')) return;
-  cancelled = false;
-  setStatus('sd_status3', '压成块…');
-  el('sd_compose').disabled = true;
   try {
     const samples = s.read1.samples || [];
     const rulings = selectedRulings();
-    const key = hashKey({ name: s.name, genre: s.genre, read1: s.read1, read2: s.read2, samples, blacklist: selectedBlacklist(), rulings });
-    const { data, cached } = await cachedRun(
-      'compose',
-      key,
-      async () =>
-        (
-          await callModel(
-            Prompts.compose({
-              name: s.name,
-              genre: s.genre,
-              read1: s.read1,
-              read2: s.read2,
-              samples,
-              blacklist: selectedBlacklist(),
-              rulings
-            }),
-            (chunk) => {
-              el('sd_block').value = chunk;
-            }
-          )
-        ).trim(),
-      force
-    );
-    s.block = data;
+    const block = composeLocally({
+      name: s.name,
+      genre: s.genre,
+      read1: s.read1,
+      read2: s.read2,
+      samples,
+      blacklist: selectedBlacklist(),
+      rulings
+    });
+    s.block = block;
     el('sd_block').value = s.block;
-    setStatus('sd_status3', cached ? '输入没变，用上次结果，未再调用 API。' : '成块了。', 'ok');
+    setStatus('sd_status3', '成块了（本地拼装，没有调用 API）。', 'ok');
     updateWizard();
     save();
   } catch (e) {
     setStatus('sd_status3', String(e.message || e), 'error');
-  } finally {
-    el('sd_compose').disabled = false;
-    busySteps.delete('compose');
   }
 }
 
@@ -1972,6 +2022,7 @@ function currentSnapshot() {
   return {
     name: s.name,
     source: s.source,
+    styleNotes: s.styleNotes,
     genre: s.genre,
     read1: s.read1,
     beliefs: s.beliefs,
@@ -1990,7 +2041,8 @@ function currentSnapshot() {
 function applySnapshot(data) {
   const s = settings();
   s.name = data.name || '';
-  s.source = data.source || 'mine';
+  s.source = normalizeSource(data.source);
+  s.styleNotes = data.styleNotes || '';
   s.genre = data.genre || 'narration';
   s.read1 = data.read1 || null;
   s.beliefs = data.beliefs || [];
@@ -2025,7 +2077,8 @@ function snapshotFromJSON(raw) {
   const play = raw.play || {};
   return {
     name: raw.name || '',
-    source: raw.source || 'mine',
+    source: normalizeSource(raw.source),
+    styleNotes: raw.styleNotes || '',
     genre: raw.genre || 'narration',
     read1: read1 || null,
     beliefs: normalizeBeliefs(raw.beliefs || (read1 && read1.beliefs)),
@@ -2215,7 +2268,9 @@ function restoreLayer() {
   const tempNode = el('sd_temp');
   setVal('sd_tempval', tempNode ? tempNode.value : '0.7', 'text');
   try { updateMode(); } catch (e) { console.warn('[大厨烹饪处] updateMode', e); }
-  setVal('sd_source', s.source || 'mine');
+  setVal('sd_source', s.source);
+  setVal('sd_rulenotes', s.styleNotes || '');
+  try { updateSourceUI(); } catch (e) { console.warn('[大厨烹饪处] updateSourceUI', e); }
   setVal('sd_genre', s.genre || 'narration');
   setVal('sd_thrifty', s.thrifty !== false, 'checked');
   setVal('sd_name', s.name || '');
@@ -2226,7 +2281,7 @@ function restoreLayer() {
   setVal('sd_block', s.block || '');
   setVal('sd_play', s.playMode || 'none');
   try {
-    if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.source === 'reference' ? s.draft : null }));
+    if (s.read1) renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
   } catch (e) { console.warn('[大厨烹饪处] renderReadout1', e); }
   try { if (s.beliefs && s.beliefs.length) renderBeliefs(); } catch (e) { console.warn('[大厨烹饪处] renderBeliefs', e); }
   try { if (s.read2) renderReadout(el('sd_position'), s.read2); } catch (e) { console.warn('[大厨烹饪处] renderReadout2', e); }
@@ -2291,7 +2346,7 @@ function bindLayer() {
 
   bind('sd_read1', 'click', (e) => runRead1(forceFromEvent(e)));
   bind('sd_read2', 'click', (e) => runRead2(forceFromEvent(e)));
-  bind('sd_compose', 'click', (e) => runCompose(forceFromEvent(e)));
+  bind('sd_compose', 'click', () => runCompose());
   bind('sd_dorewrite', 'click', (e) => runRewrite(forceFromEvent(e)));
 
   bind('sd_readout', 'click', (e) => {
@@ -2319,7 +2374,8 @@ function bindLayer() {
   });
   bind('sd_pull', 'click', pullModels);
 
-  bind('sd_source', 'change', (e) => { settings().source = e.target.value; save(); });
+  bind('sd_source', 'change', (e) => { settings().source = normalizeSource(e.target.value); updateSourceUI(); save(); });
+  bind('sd_rulenotes', 'input', (e) => { settings().styleNotes = e.target.value; save(); });
   bind('sd_genre', 'change', (e) => { settings().genre = e.target.value; save(); });
   bind('sd_thrifty', 'change', (e) => { settings().thrifty = e.target.checked; save(); });
   bind('sd_name', 'input', (e) => { settings().name = e.target.value; save(); });
