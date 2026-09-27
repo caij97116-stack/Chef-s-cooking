@@ -475,6 +475,15 @@
   gap: 6px;
 }
 
+.sd-lore-entry {
+  background: var(--sd-card);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 /* ---------- 手机端 ---------- */
 
 @media (max-width: 640px) {

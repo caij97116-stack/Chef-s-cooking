@@ -47,6 +47,7 @@ const defaultSettings = Object.freeze({
   },
   voice: { corpus: '', entry: '' },
   polish: { description: '', personality: '', scenario: '' },
+  lore: { mode: 'card', source: '', query: '', snippets: '', hint: '', count: '3', entries: [] },
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -84,6 +85,7 @@ const panelTpl = `
       <button class="sd-tab" id="sd_tab_remsg" data-mod="remsg">✏️ 楼层改写</button>
       <button class="sd-tab" id="sd_tab_voice" data-mod="voice">🗣 说话腔</button>
       <button class="sd-tab" id="sd_tab_polish" data-mod="polish">✨ 卡片润色</button>
+      <button class="sd-tab" id="sd_tab_lore" data-mod="lore">📚 世界书</button>
     </div>
 
     <div class="sd-page" id="sd_page_distill">
@@ -434,6 +436,62 @@ const panelTpl = `
           <button id="sd_pl_write" class="menu_button sd-primary">写回角色卡</button>
         </div>
         <div id="sd_pl_wstatus" class="sd-status"></div>
+      </div>
+    </div>
+
+    <div class="sd-page" id="sd_page_lore" style="display:none">
+      <div class="sd-sec">
+        <div class="sd-sec-title">世界书补条目<span class="sd-hint">不知道世界书该怎么写的时候用</span></div>
+        <label class="sd-field"><span>方式</span>
+          <select id="sd_lo_mode">
+            <option value="card">根据角色分析</option>
+            <option value="search">联网搜索真实资料</option>
+          </select>
+        </label>
+        <div id="sd_lo_card_wrap">
+          <div class="sd-inline">
+            <button id="sd_lo_takecard" class="menu_button">取角色卡</button>
+            <span id="sd_lo_takestatus" class="sd-status"></span>
+          </div>
+          <label class="sd-field"><span>角色素材</span>
+            <textarea id="sd_lo_source" rows="5" placeholder="点「取角色卡」自动填，也可以自己贴。"></textarea>
+          </label>
+        </div>
+        <div id="sd_lo_search_wrap" style="display:none">
+          <div class="sd-inline">
+            <input id="sd_lo_query" type="text" placeholder="要查的概念/地点/年代，比如：维多利亚时代伦敦贫民窟">
+            <button id="sd_lo_search" class="menu_button">搜索</button>
+            <span id="sd_lo_searchstatus" class="sd-status"></span>
+          </div>
+          <div class="sd-note">走的是维基百科的公开接口，不是通用搜索引擎——查真实概念/地点/历史一般够用，查不到冷门或虚构设定。</div>
+          <label class="sd-field"><span>查到的资料（可以改删）</span>
+            <textarea id="sd_lo_snippets" rows="5" placeholder="点「搜索」自动填。"></textarea>
+          </label>
+        </div>
+        <label class="sd-field"><span>想要的方向（可选）</span>
+          <input id="sd_lo_hint" type="text" placeholder="比如：偏重物价和治安，别写地图">
+        </label>
+        <label class="sd-field"><span>生成几条</span>
+          <select id="sd_lo_count">
+            <option value="2">2 条</option>
+            <option value="3" selected>3 条</option>
+            <option value="5">5 条</option>
+          </select>
+        </label>
+        <div class="sd-actions">
+          <button id="sd_lo_generate" class="menu_button sd-primary">生成条目</button>
+          <span id="sd_lo_status" class="sd-status"></span>
+        </div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">挑一下，写进世界书</div>
+        <div id="sd_lo_entries"><div class="sd-note">还没有生成结果。</div></div>
+        <div class="sd-inline">
+          <select id="sd_lo_wilist"></select>
+          <input id="sd_lo_winame" type="text" placeholder="或填新世界书名">
+          <button id="sd_lo_wisave" class="menu_button sd-primary">把勾选的写进世界书</button>
+        </div>
+        <div id="sd_lo_wistatus" class="sd-status"></div>
       </div>
     </div>
   </div>
@@ -2288,6 +2346,235 @@ function buildLorebook(name, content) {
   return { name, entries: { 0: buildLorebookEntry(name, content, 0) } };
 }
 
+/* ================= 世界书补条目 ================= */
+
+function loModeUI() {
+  const mode = settings().lore.mode;
+  const cardWrap = el('sd_lo_card_wrap');
+  const searchWrap = el('sd_lo_search_wrap');
+  if (cardWrap) cardWrap.style.display = mode === 'search' ? 'none' : '';
+  if (searchWrap) searchWrap.style.display = mode === 'search' ? '' : 'none';
+}
+
+function loTakeCard() {
+  const text = cardCorpus();
+  if (!text) {
+    setStatus('sd_lo_takestatus', '拿不到当前角色卡。', 'error');
+    return;
+  }
+  settings().lore.source = text;
+  setVal('sd_lo_source', text);
+  save();
+  setStatus('sd_lo_takestatus', '已取角色卡素材（' + text.length + ' 字）。', 'ok');
+}
+
+// 维基百科公开接口，支持跨域(origin=*)调用，不需要额外的搜索引擎 API Key。
+// 只能查到维基百科收录的内容，不是通用网页搜索。
+async function wikiSearch(query) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('先填要查的词。');
+  const searchUrl =
+    'https://zh.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=3&srsearch=' +
+    encodeURIComponent(q);
+  const res = await fetch(searchUrl);
+  if (!res.ok) throw new Error('检索失败（' + res.status + '）。');
+  const data = await res.json();
+  const hits = (data && data.query && data.query.search) || [];
+  if (!hits.length) throw new Error('没搜到相关词条，换个说法试试。');
+  const parts = [];
+  for (const hit of hits) {
+    try {
+      const sumRes = await fetch('https://zh.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(hit.title));
+      if (sumRes.ok) {
+        const sum = await sumRes.json();
+        if (sum && sum.extract) parts.push('【' + hit.title + '】\n' + sum.extract);
+      }
+    } catch (e) {
+      /* 单条摘要失败就跳过，不影响其他条 */
+    }
+  }
+  if (!parts.length) throw new Error('搜到了词条但没拿到摘要，换个说法试试。');
+  return parts.join('\n\n');
+}
+
+async function runLoreSearch() {
+  const s = settings();
+  s.lore.query = (el('sd_lo_query') && el('sd_lo_query').value.trim()) || '';
+  save();
+  if (!s.lore.query) {
+    setStatus('sd_lo_searchstatus', '先填要查的词。', 'error');
+    return;
+  }
+  setStatus('sd_lo_searchstatus', '搜索中…');
+  el('sd_lo_search').disabled = true;
+  try {
+    const text = await wikiSearch(s.lore.query);
+    s.lore.snippets = text;
+    setVal('sd_lo_snippets', text);
+    setStatus('sd_lo_searchstatus', '搜到资料了，可以改删后再生成。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_lo_searchstatus', String(e.message || e), 'error');
+  } finally {
+    el('sd_lo_search').disabled = false;
+  }
+}
+
+async function runLoreGenerate(force) {
+  const s = settings();
+  const mode = s.lore.mode;
+  s.lore.hint = (el('sd_lo_hint') && el('sd_lo_hint').value.trim()) || '';
+  s.lore.count = (el('sd_lo_count') && el('sd_lo_count').value) || '3';
+  if (mode === 'search') {
+    s.lore.snippets = (el('sd_lo_snippets') && el('sd_lo_snippets').value.trim()) || '';
+  } else {
+    s.lore.source = (el('sd_lo_source') && el('sd_lo_source').value.trim()) || '';
+  }
+  save();
+  const count = Number(s.lore.count) || 3;
+  if (mode === 'search' && !s.lore.snippets) {
+    setStatus('sd_lo_status', '先搜索，拿到资料再生成。', 'error');
+    return;
+  }
+  if (mode !== 'search' && !s.lore.source) {
+    setStatus('sd_lo_status', '先取角色素材。', 'error');
+    return;
+  }
+  if (!lockOr('sd_lo_status', 'lore')) return;
+  cancelled = false;
+  setStatus('sd_lo_status', '生成中…');
+  el('sd_lo_generate').disabled = true;
+  try {
+    const key = hashKey({ stage: 'lore', mode, source: s.lore.source, query: s.lore.query, snippets: s.lore.snippets, hint: s.lore.hint, count });
+    const { data, cached } = await cachedRun(
+      'lore',
+      key,
+      async () =>
+        parseJSON(
+          await callModel(
+            mode === 'search'
+              ? Prompts.loreFromSearch({ query: s.lore.query, snippets: s.lore.snippets, hint: s.lore.hint, count })
+              : Prompts.loreFromCard({ source: s.lore.source, hint: s.lore.hint, count })
+          )
+        ),
+      force
+    );
+    const list = (Array.isArray(data.entries) ? data.entries : [])
+      .map((e2) => ({
+        key: Array.isArray(e2.key) ? e2.key.map((k) => String(k || '').trim()).filter(Boolean) : [String(e2.key || '').trim()].filter(Boolean),
+        content: String(e2.content || '').trim(),
+        on: true
+      }))
+      .filter((e2) => e2.content);
+    if (!list.length) throw new Error('模型没返回条目，重试一次。');
+    s.lore.entries = list;
+    renderLoreEntries();
+    setStatus('sd_lo_status', cached ? '输入没变，用上次结果，未再调用 API。' : '生成好了，挑一下要写哪些。', 'ok');
+    save();
+  } catch (e) {
+    setStatus('sd_lo_status', String(e.message || e), 'error');
+  } finally {
+    el('sd_lo_generate').disabled = false;
+    busySteps.delete('lore');
+  }
+}
+
+function renderLoreEntries() {
+  const target = el('sd_lo_entries');
+  if (!target) return;
+  const list = settings().lore.entries || [];
+  if (!list.length) {
+    target.innerHTML = '<div class="sd-note">还没有生成结果。</div>';
+    return;
+  }
+  target.innerHTML = list
+    .map(
+      (e2, i) =>
+        '<div class="sd-lore-entry">' +
+        '<label class="sd-check"><input type="checkbox" class="sd-lo-on" data-i="' + i + '"' + (e2.on ? ' checked' : '') + '> <span>写入这一条</span></label>' +
+        '<label class="sd-field"><span>触发关键词（逗号分隔）</span><input type="text" class="sd-lo-key" data-i="' + i + '" value="' + esc(e2.key.join('，')) + '"></label>' +
+        '<label class="sd-field"><span>正文</span><textarea class="sd-lo-content" data-i="' + i + '" rows="4">' + esc(e2.content) + '</textarea></label>' +
+        '</div>'
+    )
+    .join('');
+  target.querySelectorAll('.sd-lo-on').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      settings().lore.entries[Number(cb.dataset.i)].on = cb.checked;
+      save();
+    });
+  });
+  target.querySelectorAll('.sd-lo-key').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      settings().lore.entries[Number(inp.dataset.i)].key = inp.value.split(/[，,]/).map((x) => x.trim()).filter(Boolean);
+      save();
+    });
+  });
+  target.querySelectorAll('.sd-lo-content').forEach((ta) => {
+    ta.addEventListener('input', () => {
+      settings().lore.entries[Number(ta.dataset.i)].content = ta.value;
+      save();
+    });
+  });
+}
+
+function buildLoreEntrySelective(keys, content, uid) {
+  return {
+    uid,
+    key: keys && keys.length ? keys : ['条目'],
+    keysecondary: [],
+    comment: (keys && keys[0]) || '条目',
+    content,
+    constant: false,
+    vectorized: false,
+    selective: true,
+    selectiveLogic: 0,
+    addMemo: true,
+    order: 100,
+    position: 0,
+    disable: false,
+    excludeRecursion: false,
+    preventRecursion: false,
+    delayUntilRecursion: false,
+    probability: 100,
+    useProbability: true,
+    depth: 4
+  };
+}
+
+async function loSaveWorldInfo() {
+  const c = ctx();
+  if (typeof c.loadWorldInfo !== 'function' || typeof c.saveWorldInfo !== 'function') {
+    setStatus('sd_lo_wistatus', '这版酒馆没有世界书写入接口，请手动复制粘贴。', 'error');
+    return;
+  }
+  const list = (settings().lore.entries || []).filter((e2) => e2.on && e2.content.trim());
+  if (!list.length) {
+    setStatus('sd_lo_wistatus', '先勾选至少一条。', 'error');
+    return;
+  }
+  const pick = el('sd_lo_wilist') ? el('sd_lo_wilist').value : '';
+  const name = (el('sd_lo_winame') ? el('sd_lo_winame').value.trim() : '') || pick || '世界书补充';
+  if (!window.confirm('把勾选的 ' + list.length + ' 条写进世界书「' + name + '」？')) return;
+  try {
+    const data = (await c.loadWorldInfo(name)) || { entries: {} };
+    if (!data.entries) data.entries = {};
+    let uid = Object.keys(data.entries)
+      .map((k) => Number(data.entries[k] && data.entries[k].uid != null ? data.entries[k].uid : k))
+      .filter((n) => Number.isFinite(n))
+      .reduce((a, b) => Math.max(a, b), -1);
+    for (const e2 of list) {
+      uid += 1;
+      data.entries[uid] = buildLoreEntrySelective(e2.key, e2.content, uid);
+    }
+    await c.saveWorldInfo(name, data, true);
+    if (typeof c.reloadWorldInfoEditor === 'function') c.reloadWorldInfoEditor(name);
+    renderWiList();
+    setStatus('sd_lo_wistatus', '已写入「' + name + '」（' + list.length + ' 条），去「世界信息」看看。', 'ok');
+  } catch (e) {
+    setStatus('sd_lo_wistatus', '写入失败：' + String(e.message || e), 'error');
+  }
+}
+
 function fillWiSelect(sel) {
   if (!sel) return;
   let names = [];
@@ -2305,6 +2592,7 @@ function fillWiSelect(sel) {
 function renderWiList() {
   fillWiSelect(el('sd_wilist'));
   fillWiSelect(el('sd_vc_wilist'));
+  fillWiSelect(el('sd_lo_wilist'));
 }
 
 function renderStyles(selectedId) {
@@ -2353,13 +2641,12 @@ function updateWizard() {
 
 function applyModule() {
   const s = settings();
-  const mod = s.activeModule === 'opening' || s.activeModule === 'remsg' || s.activeModule === 'voice' || s.activeModule === 'polish'
-    ? s.activeModule
-    : 'distill';
+  const MODS = ['opening', 'remsg', 'voice', 'polish', 'lore'];
+  const mod = MODS.includes(s.activeModule) ? s.activeModule : 'distill';
   document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
     t.classList.toggle('sd-on', t.dataset.mod === mod);
   });
-  ['distill', 'opening', 'remsg', 'voice', 'polish'].forEach((m) => {
+  ['distill', ...MODS].forEach((m) => {
     const page = el('sd_page_' + m);
     if (page) page.style.display = m === mod ? '' : 'none';
   });
@@ -2368,7 +2655,8 @@ function applyModule() {
 
 function switchModule(mod) {
   const s = settings();
-  s.activeModule = mod === 'opening' || mod === 'remsg' || mod === 'voice' || mod === 'polish' ? mod : 'distill';
+  const MODS = ['opening', 'remsg', 'voice', 'polish', 'lore'];
+  s.activeModule = MODS.includes(mod) ? mod : 'distill';
   save();
   applyModule();
 }
@@ -2467,6 +2755,16 @@ function restoreLayer() {
     setVal('sd_pl_pers', s.polish.personality || '');
     setVal('sd_pl_scen', s.polish.scenario || '');
   } catch (e) { console.warn('[大厨烹饪处] polish 字段恢复失败', e); }
+  try {
+    setVal('sd_lo_mode', s.lore.mode || 'card');
+    setVal('sd_lo_source', s.lore.source || '');
+    setVal('sd_lo_query', s.lore.query || '');
+    setVal('sd_lo_snippets', s.lore.snippets || '');
+    setVal('sd_lo_hint', s.lore.hint || '');
+    setVal('sd_lo_count', s.lore.count || '3');
+    loModeUI();
+    renderLoreEntries();
+  } catch (e) { console.warn('[大厨烹饪处] lore 字段恢复失败', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -2808,6 +3106,17 @@ function bindLayer() {
   bind('sd_pl_scen', 'input', (e) => { settings().polish.scenario = e.target.value; save(); });
   bind('sd_pl_go', 'click', (e) => runPolish(forceFromEvent(e)));
   bind('sd_pl_write', 'click', polishWrite);
+
+  bind('sd_lo_mode', 'change', (e) => { settings().lore.mode = e.target.value; loModeUI(); save(); });
+  bind('sd_lo_takecard', 'click', loTakeCard);
+  bind('sd_lo_source', 'input', (e) => { settings().lore.source = e.target.value; save(); });
+  bind('sd_lo_query', 'input', (e) => { settings().lore.query = e.target.value; save(); });
+  bind('sd_lo_search', 'click', runLoreSearch);
+  bind('sd_lo_snippets', 'input', (e) => { settings().lore.snippets = e.target.value; save(); });
+  bind('sd_lo_hint', 'input', (e) => { settings().lore.hint = e.target.value; save(); });
+  bind('sd_lo_count', 'change', (e) => { settings().lore.count = e.target.value; save(); });
+  bind('sd_lo_generate', 'click', (e) => runLoreGenerate(forceFromEvent(e)));
+  bind('sd_lo_wisave', 'click', loSaveWorldInfo);
 
   bind('sd_panel_close', 'click', () => {
     settings().panelOpen = false;

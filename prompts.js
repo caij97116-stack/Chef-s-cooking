@@ -367,6 +367,45 @@ ${old}
   ];
 }
 
+// ---------- 世界书补条目：给不知道该怎么写世界书的人用 ----------
+export function loreFromCard({ source, hint, count }) {
+  return [
+    { role: "system", content: SYS_JSON },
+    {
+      role: "user",
+      content: `用户不太清楚世界书(lorebook)该怎么写。请从下面的角色素材里，挑出值得单独展开成世界书条目的概念/设定/背景，写 ${count} 条。
+
+【角色素材】
+${source}
+${hint && hint.trim() ? `\n【用户想要的方向】\n${hint}\n` : ""}
+每条给：
+- key：1-3 个触发关键词，必须是角色素材里会原样出现的词，越具体越好，不要写角色本名（角色本名不需要额外触发）。
+- content：条目正文，第三人称客观陈述，写成能直接当设定资料查阅的样子，不要写成对话或旁白，不要重复角色卡已经说过的话，要在角色素材的基础上合理展开细节。
+
+只输出 JSON：{"entries":[{"key":["",""],"content":""}]}`
+    }
+  ];
+}
+
+export function loreFromSearch({ query, snippets, hint, count }) {
+  return [
+    { role: "system", content: SYS_JSON },
+    {
+      role: "user",
+      content: `下面是关于「${query}」检索到的真实资料。用户不太清楚世界书(lorebook)该怎么写，请基于这些资料帮忙写 ${count} 条世界书条目——事实性内容必须以检索资料为准，资料里没有的具体数字/人名/事件不要编。
+
+【检索资料】
+${snippets}
+${hint && hint.trim() ? `\n【用户想要的方向】\n${hint}\n` : ""}
+每条给：
+- key：1-3 个触发关键词。
+- content：条目正文，第三人称客观陈述，能直接当设定资料用。
+
+只输出 JSON：{"entries":[{"key":["",""],"content":""}]}`
+    }
+  ];
+}
+
 export function speechStyle({ source }) {
   return [
     { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
