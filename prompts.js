@@ -317,17 +317,28 @@ ${badRewrite}
   ];
 }
 
-export function openings({ source, styleBlock, scene, count }) {
+export const OPENING_LENGTH = {
+  short: "简短：1-2 句话，点到即止",
+  medium: "适中：3-5 句话，一个小段落",
+  long: "详细：6 句以上，可以分 2-3 段"
+};
+
+const PERSONA_BLOCK = (persona) =>
+  persona && persona.trim()
+    ? `\n【{{user}} 的人设参考】\n${persona.trim()}\n（只用来让角色的称呼/态度更贴合对方是谁，正文里不要直接写出 {{user}} 人设里的具体名字，统一用「你」或 {{user}} 宏）\n`
+    : "";
+
+export function openings({ source, styleBlock, scene, count, length, persona }) {
   return [
     { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
     {
       role: "user",
-      content: `根据下面的角色素材，写 ${count} 条开场白。开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明、不要“（未命名）”这类占位。
+      content: `根据下面的角色素材，写 ${count} 条开场白。开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明、不要“（未命名）”这类占位。正文里不要点出 {{user}} 的具体人设名字，统一用「你」或 {{user}} 宏称呼对方。
 
 【场景】${scene}
 【条数】${count} 条，切入角度要有明显区分，不要一个意思换皮。
-${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}
-【角色素材】
+【字数】${OPENING_LENGTH[length] || OPENING_LENGTH.medium}
+${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}${PERSONA_BLOCK(persona)}【角色素材】
 ${source}
 
 只输出 JSON：{"openings":["",""]}`
@@ -335,17 +346,17 @@ ${source}
   ];
 }
 
-export function rewriteOpening({ source, styleBlock, scene, old }) {
+export function rewriteOpening({ source, styleBlock, scene, old, length, persona }) {
   return [
     { role: "system", content: "你是大厨烹饪处。你只输出 JSON。" },
     {
       role: "user",
       content: `重写下面这条开场白，换一个切入角度或写法，保持场景与人物不变，不要复述原句。
-开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明。
+开场白是角色对 {{user}} 说的第一段话，直接开口，不要标题、不要旁白说明。正文里不要点出 {{user}} 的具体人设名字，统一用「你」或 {{user}} 宏称呼对方。
 
 【场景】${scene}
-${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}
-【角色素材】
+【字数】${OPENING_LENGTH[length] || OPENING_LENGTH.medium}
+${styleBlock ? `\n【文风块】（叙述与用词严格遵守）\n${styleBlock}\n` : ""}${PERSONA_BLOCK(persona)}【角色素材】
 ${source}
 
 【要重写的这条】

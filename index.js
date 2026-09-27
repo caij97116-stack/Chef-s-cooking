@@ -31,7 +31,20 @@ const defaultSettings = Object.freeze({
   styles: [],
   panelOpen: false,
   activeModule: 'distill',
-  opening: { source: '', styleFrom: 'current', scene: 'first', sceneCustom: '', count: '2', candidates: [], picked: -1, archive: [] },
+  opening: {
+    source: '',
+    styleFrom: 'current',
+    scene: 'first',
+    sceneCustom: '',
+    count: '2',
+    length: 'medium',
+    personaMode: 'current',
+    personaCustom: '',
+    worldbooks: [],
+    candidates: [],
+    picked: -1,
+    archive: []
+  },
   voice: { corpus: '', entry: '' },
   polish: { description: '', personality: '', scenario: '' },
   cache: {},
@@ -253,9 +266,11 @@ const panelTpl = `
         <div class="sd-sec-title">选题源</div>
         <div class="sd-inline">
           <button id="sd_op_takecard" class="menu_button">取角色卡</button>
-          <button id="sd_op_takelore" class="menu_button">角色卡 + 世界书</button>
+          <button id="sd_op_takelore" class="menu_button">角色卡 + 勾选的世界书</button>
+          <button id="sd_op_booksrefresh" class="menu_button">刷新世界书列表</button>
           <span id="sd_op_takestatus" class="sd-status"></span>
         </div>
+        <div id="sd_op_books" class="sd-note">（点「刷新世界书列表」看看有哪些）</div>
         <label class="sd-field"><span>角色素材（描述 / 性格 / 场景 / 示例对白）</span>
           <textarea id="sd_op_source" rows="6" placeholder="点「取角色卡」自动填，也可以自己贴。"></textarea>
         </label>
@@ -268,6 +283,21 @@ const panelTpl = `
             <option value="none">不用文风，只写开场白</option>
           </select>
         </label>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">选人设</div>
+        <label class="sd-field"><span>{{user}} 的人设来源</span>
+          <select id="sd_op_persona">
+            <option value="current">用我当前用户人设</option>
+            <option value="custom">自己写一段简介</option>
+          </select>
+        </label>
+        <div id="sd_op_personacustom_wrap" style="display:none">
+          <label class="sd-field"><span>{{user}} 简介</span>
+            <textarea id="sd_op_personacustom" rows="3" placeholder="简单几句就行，比如身份/性格/和角色的关系。"></textarea>
+          </label>
+        </div>
+        <div class="sd-note">不管选哪种，正文里都不会直接点出 {{user}} 的具体人设名字。</div>
       </div>
       <div class="sd-sec">
         <div class="sd-sec-title">选场景</div>
@@ -287,6 +317,13 @@ const panelTpl = `
             </select>
           </label>
         </div>
+        <label class="sd-field"><span>字数</span>
+          <select id="sd_op_length">
+            <option value="short">简短（1-2 句）</option>
+            <option value="medium">适中（3-5 句）</option>
+            <option value="long">详细（6 句以上）</option>
+          </select>
+        </label>
         <label class="sd-field" id="sd_op_scenecustom_wrap" style="display:none"><span>一句话描述你想开的场景</span>
           <input id="sd_op_scenecustom" type="text" placeholder="例如：雨夜的便利店，她刚下夜班">
         </label>
@@ -434,6 +471,13 @@ function settings() {
   // 旧版只有 我的文字(mine)/参考文字(reference) 两档，迁移成新的三档
   s.source = normalizeSource(s.source);
   if (s.styleNotes == null) s.styleNotes = '';
+  // 旧存档的 opening 对象可能没有这几个新字段，补上默认值
+  if (s.opening) {
+    if (s.opening.length == null) s.opening.length = 'medium';
+    if (s.opening.personaMode == null) s.opening.personaMode = 'current';
+    if (s.opening.personaCustom == null) s.opening.personaCustom = '';
+    if (!Array.isArray(s.opening.worldbooks)) s.opening.worldbooks = [];
+  }
   return s;
 }
 
@@ -1383,21 +1427,86 @@ function opTakeCard() {
   setStatus('sd_op_takestatus', '已取角色卡素材（' + text.length + ' 字），可再增删。', 'ok');
 }
 
+function opDefaultBookName() {
+  try {
+    const c = ctx();
+    const ch = c.characters && c.characters[c.characterId];
+    return (ch && ch.extensions && ch.extensions.world) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function opAvailableBooks() {
+  try {
+    const c = ctx();
+    if (typeof c.getWorldInfoNames === 'function') return c.getWorldInfoNames() || [];
+  } catch (e) {}
+  return [];
+}
+
+// 列出世界书勾选框：默认勾上角色已挂载的那本，其余可以自由加选。
+function renderOpBooks() {
+  const wrap = el('sd_op_books');
+  if (!wrap) return;
+  const s = settings();
+  if (!Array.isArray(s.opening.worldbooks)) s.opening.worldbooks = [];
+  const names = opAvailableBooks();
+  if (!names.length) {
+    wrap.innerHTML = '<div class="sd-note">没读到世界书列表（这版酒馆可能不支持列出全部世界书）；点「角色卡 + 勾选的世界书」会退回用角色已挂载的那一本。</div>';
+    return;
+  }
+  if (!s.opening._booksInit) {
+    const def = opDefaultBookName();
+    if (def && !s.opening.worldbooks.includes(def)) s.opening.worldbooks.push(def);
+    s.opening._booksInit = true;
+    save();
+  }
+  wrap.innerHTML = names
+    .map(
+      (n) =>
+        '<label class="sd-check"><input type="checkbox" class="sd-op-book" value="' +
+        esc(n) +
+        '"' +
+        (s.opening.worldbooks.includes(n) ? ' checked' : '') +
+        '> <span>' +
+        esc(n) +
+        '</span></label>'
+    )
+    .join('');
+  wrap.querySelectorAll('.sd-op-book').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const cur = settings().opening;
+      const set = new Set(cur.worldbooks || []);
+      if (cb.checked) set.add(cb.value);
+      else set.delete(cb.value);
+      cur.worldbooks = Array.from(set);
+      save();
+    });
+  });
+}
+
 async function opTakeCardWithLore() {
   const text = cardCorpus();
   if (!text) {
     setStatus('sd_op_takestatus', '拿不到当前角色卡。', 'error');
     return;
   }
+  const s = settings();
+  const picked = (s.opening.worldbooks || []).filter(Boolean);
+  const books = picked.length ? picked : [opDefaultBookName()].filter(Boolean);
   let lore = '';
   try {
     const c = ctx();
-    const ch = c.characters && c.characters[c.characterId];
-    const bookName = ch && ch.extensions && ch.extensions.world;
-    if (bookName && typeof c.loadWorldInfo === 'function') {
-      const data = await c.loadWorldInfo(bookName);
-      const entries = Object.values((data && data.entries) || {}).filter((e2) => e2 && e2.content && !e2.disable);
-      lore = entries.map((e2) => String(e2.content).trim()).join('\n\n');
+    if (typeof c.loadWorldInfo === 'function') {
+      const chunks = [];
+      for (const name of books) {
+        const data = await c.loadWorldInfo(name);
+        // “默认开启”的条目：没有被手动关掉(disable)的那些，跟酒馆本身的启用状态一致。
+        const entries = Object.values((data && data.entries) || {}).filter((e2) => e2 && e2.content && !e2.disable);
+        if (entries.length) chunks.push(entries.map((e2) => String(e2.content).trim()).join('\n\n'));
+      }
+      lore = chunks.join('\n\n');
     }
   } catch (e) {
     lore = '';
@@ -1406,7 +1515,39 @@ async function opTakeCardWithLore() {
   settings().opening.source = full;
   setVal('sd_op_source', full);
   save();
-  setStatus('sd_op_takestatus', '已取角色卡' + (lore ? ' + 世界书' : '（没找到挂载的世界书）') + '（' + full.length + ' 字）。', 'ok');
+  setStatus(
+    'sd_op_takestatus',
+    '已取角色卡' + (lore ? ' + ' + books.length + ' 本世界书' : '（勾选的世界书没读到条目）') + '（' + full.length + ' 字）。',
+    'ok'
+  );
+}
+
+// 人设：尝试拿当前用户人设名字+简介；拿不到就返回 null，界面上会提示改用"自己写一段简介"。
+function personaCorpus() {
+  try {
+    const c = ctx();
+    const name = c.name1 || '';
+    let desc = '';
+    if (typeof c.getPersonaDescription === 'function') desc = c.getPersonaDescription() || '';
+    else if (c.powerUserSettings && c.powerUserSettings.persona_description) desc = c.powerUserSettings.persona_description;
+    else if (c.power_user && c.power_user.persona_description) desc = c.power_user.persona_description;
+    else if (c.personas && c.user_avatar && c.personas[c.user_avatar]) desc = c.personas[c.user_avatar];
+    const text = [name ? '人设名：' + name : '', desc ? String(desc).trim() : ''].filter(Boolean).join('\n');
+    return text || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function opPersonaUI() {
+  const wrap = el('sd_op_personacustom_wrap');
+  if (wrap) wrap.style.display = settings().opening.personaMode === 'custom' ? '' : 'none';
+}
+
+function opPersonaText() {
+  const o = settings().opening;
+  if (o.personaMode === 'custom') return (o.personaCustom || '').trim();
+  return personaCorpus() || '';
 }
 
 function opSceneUI() {
@@ -1446,11 +1587,13 @@ async function runOpenings(force) {
     const scene = opSceneLabel();
     const count = Number(s.opening.count) || 2;
     const block = opStyleBlock();
-    const key = hashKey({ stage: 'openings', source: s.opening.source, scene, count, block });
+    const length = s.opening.length || 'medium';
+    const persona = opPersonaText();
+    const key = hashKey({ stage: 'openings', source: s.opening.source, scene, count, block, length, persona });
     const { data, cached } = await cachedRun(
       'openings',
       key,
-      async () => parseJSON(await callModel(Prompts.openings({ source: s.opening.source, styleBlock: block, scene, count }))),
+      async () => parseJSON(await callModel(Prompts.openings({ source: s.opening.source, styleBlock: block, scene, count, length, persona }))),
       force
     );
     const list = (Array.isArray(data.openings) ? data.openings : []).map((t) => String(t || '').trim()).filter(Boolean);
@@ -1478,7 +1621,9 @@ async function runOpeningRewrite(i) {
   try {
     const block = opStyleBlock();
     const scene = opSceneLabel();
-    const out = await callModel(Prompts.rewriteOpening({ source: s.opening.source, styleBlock: block, scene, old: list[i] }));
+    const length = s.opening.length || 'medium';
+    const persona = opPersonaText();
+    const out = await callModel(Prompts.rewriteOpening({ source: s.opening.source, styleBlock: block, scene, old: list[i], length, persona }));
     const parsed = parseJSON(out);
     const text = String(parsed.opening || '').trim();
     if (!text) throw new Error('返回是空的，再试一次。');
@@ -1510,6 +1655,8 @@ function renderOpenings() {
         '<div class="sd-cand-actions">' +
         '<button class="menu_button sd-op-rew" data-i="' + i + '">重写这一条</button>' +
         '<button class="menu_button sd-op-use" data-i="' + i + '">就用这条</button>' +
+        '<button class="menu_button sd-op-first" data-i="' + i + '">写第一条</button>' +
+        '<button class="menu_button sd-op-alt" data-i="' + i + '">加备选</button>' +
         '</div></div>'
     )
     .join('');
@@ -1522,6 +1669,8 @@ function renderOpenings() {
       setStatus('sd_op_wstatus', '已选中第 ' + (i + 1) + ' 条，可以去「拿走」。', 'ok');
       save();
     });
+    card.querySelector('.sd-op-first').addEventListener('click', () => opWrite('first', i));
+    card.querySelector('.sd-op-alt').addEventListener('click', () => opWrite('alt', i));
   });
 }
 
@@ -1530,9 +1679,11 @@ function opPickedText() {
   return (o.candidates || [])[o.picked] || '';
 }
 
-async function opWrite(mode) {
+async function opWrite(mode, i) {
   const c = ctx();
-  const text = opPickedText();
+  const o = settings().opening;
+  const idx = i != null ? i : o.picked;
+  const text = (o.candidates || [])[idx] || '';
   if (!text) {
     setStatus('sd_op_wstatus', '先挑一条开场白。', 'error');
     return;
@@ -2295,9 +2446,14 @@ function restoreLayer() {
     setVal('sd_op_style', s.opening.styleFrom || 'current');
     setVal('sd_op_scene', s.opening.scene || 'first');
     setVal('sd_op_count', s.opening.count || '2');
+    setVal('sd_op_length', s.opening.length || 'medium');
+    setVal('sd_op_persona', s.opening.personaMode || 'current');
+    setVal('sd_op_personacustom', s.opening.personaCustom || '');
     setVal('sd_op_scenecustom', s.opening.sceneCustom || '');
   } catch (e) { console.warn('[大厨烹饪处] opening 字段恢复失败', e); }
   try { opSceneUI(); } catch (e) { console.warn('[大厨烹饪处] opSceneUI', e); }
+  try { opPersonaUI(); } catch (e) { console.warn('[大厨烹饪处] opPersonaUI', e); }
+  try { renderOpBooks(); } catch (e) { console.warn('[大厨烹饪处] renderOpBooks', e); }
   try { renderOpStyleSelect(); } catch (e) { console.warn('[大厨烹饪处] renderOpStyleSelect', e); }
   try { renderOpenings(); } catch (e) { console.warn('[大厨烹饪处] renderOpenings', e); }
   try { renderOpArch(); } catch (e) { console.warn('[大厨烹饪处] renderOpArch', e); }
@@ -2590,6 +2746,10 @@ function bindLayer() {
   /* ---- 开场白工坊 ---- */
   bind('sd_op_takecard', 'click', opTakeCard);
   bind('sd_op_takelore', 'click', opTakeCardWithLore);
+  bind('sd_op_booksrefresh', 'click', renderOpBooks);
+  bind('sd_op_persona', 'change', (e) => { settings().opening.personaMode = e.target.value; opPersonaUI(); save(); });
+  bind('sd_op_personacustom', 'input', (e) => { settings().opening.personaCustom = e.target.value; save(); });
+  bind('sd_op_length', 'change', (e) => { settings().opening.length = e.target.value; save(); });
   bind('sd_op_source', 'input', (e) => { settings().opening.source = e.target.value; save(); });
   bind('sd_op_style', 'change', (e) => { settings().opening.styleFrom = e.target.value; save(); });
   bind('sd_op_scene', 'change', (e) => { settings().opening.scene = e.target.value; save(); opSceneUI(); });
