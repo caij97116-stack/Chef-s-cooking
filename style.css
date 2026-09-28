@@ -106,9 +106,10 @@
 .sd-tab:hover { opacity: 1; }
 
 .sd-tab.sd-on {
-  background: var(--sd-accent);
+  background: #2d6aa0;
   border-color: transparent;
   color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
   opacity: 1;
   font-weight: 600;
 }
@@ -246,36 +247,66 @@
   box-sizing: border-box;
 }
 
-/* ---------- 按钮：分主次 ---------- */
+/* ---------- 按钮：分主次；字色/底色用 !important，压过酒馆主题对 .menu_button 的渲染 ---------- */
 
+#sd_panel .menu_button,
 .sd-panel .menu_button,
-.sd-root .menu_button {
+.sd-root .menu_button,
+.sd-panel .sd-btn {
   transition: filter 0.15s ease, transform 0.05s ease, opacity 0.15s ease;
   white-space: nowrap;
   flex: 0 0 auto;
+  font-weight: 600;
+  padding: 5px 12px;
 }
 
+#sd_panel .menu_button:hover,
 .sd-panel .menu_button:hover,
-.sd-root .menu_button:hover { filter: brightness(1.15); }
+.sd-root .menu_button:hover,
+.sd-panel .sd-btn:hover { filter: brightness(1.12); }
 
+#sd_panel .menu_button:active,
 .sd-panel .menu_button:active,
-.sd-root .menu_button:active { transform: translateY(1px); }
+.sd-root .menu_button:active,
+.sd-panel .sd-btn:active { transform: translateY(1px); }
 
-/* 主操作：实心高亮（开始读解 / 压成文风块 / 生成 / 写回 等） */
-.sd-panel .menu_button.sd-primary {
-  background: var(--sd-accent);
-  border: none;
-  color: #fff;
+/* 次要按钮：灰底 + 面板正文色，压过酒馆主题把 .menu_button 刷成白字 */
+#sd_panel .menu_button:not(.sd-primary),
+.sd-panel .menu_button:not(.sd-primary),
+.sd-root .menu_button:not(.sd-primary),
+.sd-panel .sd-btn:not(.sd-primary),
+.sd-open-cand .menu_button:not(.sd-primary) {
+  background: rgba(127, 127, 127, 0.28) !important;
+  border: 1px solid rgba(127, 127, 127, 0.6) !important;
+  color: var(--sd-fg) !important;
+  text-shadow: none !important;
+}
+
+/* 主操作：固定深蓝底 + 白字，避免主题把强调色刷浅导致白字看不见 */
+#sd_panel .menu_button.sd-primary,
+.sd-panel .menu_button.sd-primary,
+.sd-root .menu_button.sd-primary,
+.sd-panel .sd-btn.sd-primary,
+.sd-open-cand .menu_button.sd-primary {
+  background: #2d6aa0 !important;
+  border: 1px solid transparent !important;
+  color: #fff !important;
   font-weight: 600;
   padding: 5px 14px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
-.sd-panel .menu_button.sd-primary:hover { filter: brightness(1.1); }
-
-/* 次要但会改变状态的操作（像/不像、确认信念等）：给个实底，字更清楚 */
-.sd-panel .menu_button:not(.sd-primary) {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+@supports (background: color-mix(in srgb, red 50%, blue)) {
+  .sd-tab.sd-on {
+    background: color-mix(in srgb, var(--sd-accent) 50%, #16324f);
+  }
+  #sd_panel .menu_button.sd-primary,
+  .sd-panel .menu_button.sd-primary,
+  .sd-root .menu_button.sd-primary,
+  .sd-panel .sd-btn.sd-primary,
+  .sd-open-cand .menu_button.sd-primary {
+    background: color-mix(in srgb, var(--sd-accent) 48%, #16324f) !important;
+  }
 }
 
 /* 「像，通过」的完成态 */

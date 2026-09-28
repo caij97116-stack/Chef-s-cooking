@@ -28,6 +28,8 @@ const defaultSettings = Object.freeze({
   verdict: '',
   playMode: 'none',
   thrifty: true,
+  confirmed1: false,
+  confirmed2: false,
   styles: [],
   panelOpen: false,
   activeModule: 'distill',
@@ -92,9 +94,9 @@ const panelTpl = `
     <div class="sd-steps" id="sd_steps">
       <span class="sd-step" data-s="1">① 喂料</span>
       <span class="sd-step" data-s="2">② 读解</span>
-      <span class="sd-step" data-s="3">③ 定信念</span>
-      <span class="sd-step" data-s="4">④ 成块</span>
-      <span class="sd-step" data-s="5">⑤ 试写</span>
+      <span class="sd-step" data-s="3">③ 确认①</span>
+      <span class="sd-step" data-s="4">④ 确认②</span>
+      <span class="sd-step" data-s="5">⑤ 成块</span>
       <span class="sd-step" data-s="6">⑥ 拿走</span>
     </div>
     <div class="sd-sec">
@@ -176,53 +178,36 @@ const panelTpl = `
       <div id="sd_readout" class="sd-readout"></div>
     </div>
 
-    <div data-wiz="2">
-    <div class="sd-sec" id="sd_uncertain_wrap" style="display:none">
-      <div class="sd-sec-title">请你定夺<span class="sd-hint">模型不敢定的，你定夺后再成块</span></div>
-      <div id="sd_uncertain" class="sd-cards"></div>
-    </div>
-    </div>
-
     <div class="sd-sec" data-wiz="3">
-      <div class="sd-sec-title">第 3 步 · 定信念<span class="sd-hint">选 / 驳 / 修，没有你确认不进下一步</span></div>
-      <div id="sd_beliefs" class="sd-cards"></div>
-      <div class="sd-actions">
-        <button id="sd_read2" class="menu_button">确认信念，读后三遍</button>
-        <span id="sd_status2" class="sd-status"></span>
-      </div>
-    </div>
-
-    <div class="sd-sec" data-wiz="4">
-      <div class="sd-sec-title">第 4 步 · 禁忌清单<span class="sd-hint">至少 6 条，最锋利的由你补</span></div>
+      <div class="sd-sec-title">确认① · 信念与禁忌<span class="sd-hint">勾选 / 改 / 补，点确认才进下一步</span></div>
       <div id="sd_position" class="sd-readout"></div>
+      <div id="sd_beliefs" class="sd-cards"></div>
+      <div class="sd-sec-title" style="margin-top:8px">禁忌清单<span class="sd-hint">至少 6 条，最锋利的由你补</span></div>
       <div id="sd_blacklist" class="sd-cards"></div>
       <div class="sd-inline">
         <input id="sd_blackadd" type="text" placeholder="她打死也不会写的那一句">
         <button id="sd_blackaddbtn" class="menu_button">加</button>
       </div>
       <div class="sd-actions">
-        <button id="sd_compose" class="menu_button sd-primary">压成文风块</button>
-        <span id="sd_status3" class="sd-status"></span>
+        <button id="sd_confirm1" class="menu_button sd-primary">确认这一步</button>
+        <span id="sd_status2" class="sd-status"></span>
       </div>
     </div>
 
     <div class="sd-sec" data-wiz="4">
-      <div class="sd-sec-title">文风块<span class="sd-hint">可手改</span></div>
-      <textarea id="sd_block" rows="10" placeholder="文风块会出现在这里。"></textarea>
+      <div class="sd-sec-title">确认② · 拿不准的拍板<span class="sd-hint">填了才按你的决定写进文风块；没有也可以直接润色</span></div>
+      <div id="sd_uncertain_wrap">
+        <div id="sd_uncertain" class="sd-cards"></div>
+      </div>
+      <div class="sd-actions">
+        <button id="sd_confirm2" class="menu_button sd-primary">确认并润色成块</button>
+        <span id="sd_status3" class="sd-status"></span>
+      </div>
     </div>
 
     <div class="sd-sec" data-wiz="5">
-      <div class="sd-sec-title">试写检验<span class="sd-hint">默认 AI 腔让它改写，你判像不像</span></div>
-      <div class="sd-grid2">
-        <label class="sd-field"><span>默认 AI 腔</span><textarea id="sd_passage" rows="5"></textarea></label>
-        <label class="sd-field"><span>改写结果</span><textarea id="sd_rewrite" rows="5"></textarea></label>
-      </div>
-      <div class="sd-actions">
-        <button id="sd_dorewrite" class="menu_button sd-primary">用文风改写</button>
-        <button id="sd_like" class="menu_button">像，通过</button>
-        <button id="sd_unlike" class="menu_button" title="判为不像会自动修订文风块">不像，自动修块</button>
-        <span id="sd_status4" class="sd-status"></span>
-      </div>
+      <div class="sd-sec-title">文风块<span class="sd-hint">本地拼草稿后再润色一次；可手改</span></div>
+      <textarea id="sd_block" rows="10" placeholder="文风块会出现在这里。"></textarea>
     </div>
 
     <div class="sd-sec" data-wiz="6">
@@ -520,6 +505,8 @@ function settings() {
     extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
   }
   const s = extensionSettings[MODULE_NAME];
+  const hadC1 = Object.hasOwn(s, 'confirmed1');
+  const hadC2 = Object.hasOwn(s, 'confirmed2');
   for (const key of Object.keys(defaultSettings)) {
     if (!Object.hasOwn(s, key)) s[key] = structuredClone(defaultSettings[key]);
   }
@@ -529,6 +516,9 @@ function settings() {
   // 旧版只有 我的文字(mine)/参考文字(reference) 两档，迁移成新的三档
   s.source = normalizeSource(s.source);
   if (s.styleNotes == null) s.styleNotes = '';
+  // 旧流程已经有文风块 / 读解结果的，当成两次都确认过，避免升级后向导把拿走藏起来
+  if (!hadC1) s.confirmed1 = !!(s.read1 && (s.read2 || (s.block && String(s.block).trim())));
+  if (!hadC2) s.confirmed2 = !!(s.block && String(s.block).trim());
   // 旧存档的 opening 对象可能没有这几个新字段，补上默认值
   if (s.opening) {
     if (s.opening.length == null) s.opening.length = 'medium';
@@ -1021,7 +1011,10 @@ function renderUncertain() {
   const target = el('sd_uncertain');
   if (!wrap || !target) return;
   const list = s.uncertain || [];
-  wrap.style.display = list.length ? '' : 'none';
+  if (!list.length) {
+    target.innerHTML = '<div class="sd-note">这一轮没有拿不准的地方，可以直接润色成块。</div>';
+    return;
+  }
   target.innerHTML = list
     .map(
       (u, i) =>
@@ -1194,6 +1187,8 @@ async function runRead1(force) {
       q: String(q),
       ruling: ''
     }));
+    s.confirmed1 = false;
+    s.confirmed2 = false;
     renderReadout(el('sd_readout'), Object.assign({}, s.read1, { draft: s.draft }));
     renderBeliefs();
     renderUncertain();
@@ -1208,9 +1203,9 @@ async function runRead1(force) {
       pushCache('read2', hashKey({ corpus: s.corpus, genre: s.genre, beliefs: selectedBeliefs() }), s.read2);
       renderReadout(el('sd_position'), s.read2);
       renderBlacklist();
-      setStatus('sd_status1', cached ? '一次读完命中缓存，未再调用 API。' : '读解完成，直接就能成块；想细调信念也行。', 'ok');
+      setStatus('sd_status1', cached ? '一次读完命中缓存，未再调用 API。去确认①。' : '读解完成，去确认①（信念和禁忌）。', 'ok');
     } else {
-      setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。' : '读解完成，去确认信念。', 'ok');
+      setStatus('sd_status1', cached ? '输入没变，用上次结果，未再调用 API。去确认①。' : '读解完成，去确认①。', 'ok');
     }
     updateWizard();
     save();
@@ -1250,56 +1245,77 @@ async function runRefineLayer(layer) {
   }
 }
 
-async function runRead2(force) {
+async function ensureRead2(force) {
   const s = settings();
+  if (s.read2 && !force) return s.read2;
   const beliefs = selectedBeliefs();
-  if (!beliefs) {
+  if (!beliefs) throw new Error('至少留一条信念。');
+  const key = hashKey({ corpus: s.corpus, genre: s.genre, beliefs });
+  const { data } = await cachedRun(
+    'read2',
+    key,
+    async () => parseJSON(await callModel(Prompts.read2({ corpus: s.corpus, genre: s.genre, beliefs }))),
+    force
+  );
+  s.read2 = data;
+  s.blacklist = mapBlacklist(data.blacklist);
+  renderReadout(el('sd_position'), data);
+  renderBlacklist();
+  return data;
+}
+
+async function runConfirm1(force) {
+  const s = settings();
+  if (!s.read1) {
+    setStatus('sd_status2', '先把读解做完。', 'error');
+    return;
+  }
+  if (!selectedBeliefs()) {
     setStatus('sd_status2', '至少留一条信念。', 'error');
     return;
   }
-  if (!lockOr('sd_status2', 'read2')) return;
+  if (!lockOr('sd_status2', 'confirm1')) return;
   cancelled = false;
-  setStatus('sd_status2', '读后三遍…');
-  el('sd_read2').disabled = true;
+  const btn = el('sd_confirm1');
+  if (btn) btn.disabled = true;
   try {
-    const key = hashKey({ corpus: s.corpus, genre: s.genre, beliefs });
-    const { data, cached } = await cachedRun(
-      'read2',
-      key,
-      async () => parseJSON(await callModel(Prompts.read2({ corpus: s.corpus, genre: s.genre, beliefs }))),
-      force
-    );
-    s.read2 = data;
-    s.blacklist = mapBlacklist(data.blacklist);
-    renderReadout(el('sd_position'), data);
-    renderBlacklist();
-    setStatus('sd_status2', cached ? '输入没变，用上次结果，未再调用 API。' : '后三遍读完了，去补最锋利的反例。', 'ok');
+    const hadRead2 = !!s.read2 && !force;
+    if (!hadRead2) {
+      setStatus('sd_status2', '补读后三遍…');
+      await ensureRead2(force);
+      setStatus('sd_status2', '后三遍读完了，看一眼禁忌再点一次确认。', 'ok');
+      updateWizard();
+      save();
+      return;
+    }
+    const n = selectedBlacklist().length;
+    s.confirmed1 = true;
+    s.confirmed2 = false;
+    renderUncertain();
+    setStatus('sd_status2', n < 6 ? '已确认①。禁忌不到 6 条，下一步也能走，补几条更稳。' : '已确认①，去拍板拿不准的。', 'ok');
     updateWizard();
     save();
   } catch (e) {
     setStatus('sd_status2', String(e.message || e), 'error');
   } finally {
-    el('sd_read2').disabled = false;
-    busySteps.delete('read2');
+    if (btn) btn.disabled = false;
+    busySteps.delete('confirm1');
   }
 }
 
-// 压成文风块：不再调用模型。前面几步（读解/定信念/黑名单/拿不准）已经让用户确认过了，
-// 这里只是把已经确定的结论按固定格式拼起来，属于本地格式化，不产生新的 API 调用。
-function composeLocally({ name, genre, read1, read2, samples, blacklist, rulings }) {
+function composeLocally({ name, genre, read1, read2, samples, blacklist, rulings, beliefs }) {
   const syntax = (read1 && read1.syntax) || {};
   const title = `# ${name && name.trim() ? name.trim() : '未命名文风'} · ${Prompts.genreLabel(genre)}`;
-  const core = (read2 && read2.belief_core && read2.belief_core.trim()) || '（核心信念缺失，回第 3 步补）';
-  const beliefsLine =
-    ((read1 && read1.beliefs) || [])
-      .map((b) => b && b.belief)
-      .filter(Boolean)
-      .join('；') || core;
+  const core = (read2 && read2.belief_core && read2.belief_core.trim()) || '（核心信念缺失，回确认①补）';
+  const pickedBeliefs = (beliefs && beliefs.length
+    ? beliefs
+    : ((read1 && read1.beliefs) || []).map((b) => b && b.belief).filter(Boolean));
+  const beliefsLine = pickedBeliefs.join('；') || core;
   const syntaxLine = [syntax.vocab, syntax.sentence, syntax.rhythm, syntax.punctuation, syntax.register].filter(Boolean).join('；') || '（句法信息缺失）';
   const rhetoricLine = ((read1 && read1.rhetoric) || []).filter(Boolean).join('；') || '（无特别记录）';
   const neighborLine = (read2 && read2.neighbor_diff && read2.neighbor_diff.trim()) || '（未记录）';
   const blkSource = blacklist && blacklist.length ? blacklist : ((read2 && read2.blacklist) || []).map((b) => b && b.text).filter(Boolean);
-  const blacklistLines = blkSource.length ? blkSource.map((t) => `- ${t}`).join('\n') : '- （禁忌清单为空，回第 4 步至少补 6 条）';
+  const blacklistLines = blkSource.length ? blkSource.map((t) => `- ${t}`).join('\n') : '- （禁忌清单为空，回确认①至少补 6 条）';
   const sampleText = samples && samples.length ? samples.join('\n\n') : '样本缺失';
   const rulingsBlock = rulings && rulings.trim() ? `\n\n（拿不准的地方，已按你的决定处理：\n${rulings}）` : '';
   return `${title}
@@ -1314,115 +1330,69 @@ ${blacklistLines}
 ${sampleText}${rulingsBlock}`;
 }
 
-function runCompose() {
+function buildLocalDraft() {
   const s = settings();
+  return composeLocally({
+    name: s.name,
+    genre: s.genre,
+    read1: s.read1,
+    read2: s.read2,
+    samples: (s.read1 && s.read1.samples) || [],
+    blacklist: selectedBlacklist(),
+    rulings: selectedRulings(),
+    beliefs: (s.beliefs || []).filter((b) => b && b.on && b.belief && String(b.belief).trim()).map((b) => String(b.belief).trim())
+  });
+}
+
+async function runConfirm2(force) {
+  const s = settings();
+  if (!s.confirmed1) {
+    setStatus('sd_status3', '先点确认①。', 'error');
+    return;
+  }
   if (!s.read1 || !s.read2) {
     setStatus('sd_status3', '先把读解做完。', 'error');
     return;
   }
-  try {
-    const samples = s.read1.samples || [];
-    const rulings = selectedRulings();
-    const block = composeLocally({
-      name: s.name,
-      genre: s.genre,
-      read1: s.read1,
-      read2: s.read2,
-      samples,
-      blacklist: selectedBlacklist(),
-      rulings
-    });
-    s.block = block;
-    el('sd_block').value = s.block;
-    setStatus('sd_status3', '成块了（本地拼装，没有调用 API）。', 'ok');
-    updateWizard();
-    save();
-  } catch (e) {
-    setStatus('sd_status3', String(e.message || e), 'error');
-  }
-}
-
-async function runRewrite(force) {
-  const s = settings();
-  s.block = el('sd_block').value.trim();
-  const passage = el('sd_passage').value.trim();
-  if (!s.block) {
-    setStatus('sd_status4', '文风块是空的。', 'error');
-    return;
-  }
-  if (!passage) {
-    setStatus('sd_status4', '先贴一段默认 AI 腔。', 'error');
-    return;
-  }
-  if (!lockOr('sd_status4', 'rewrite')) return;
+  if (!lockOr('sd_status3', 'confirm2')) return;
   cancelled = false;
-  setStatus('sd_status4', '改写中…');
-  el('sd_dorewrite').disabled = true;
+  const btn = el('sd_confirm2');
+  if (btn) btn.disabled = true;
+  const draft = buildLocalDraft();
+  el('sd_block').value = draft;
+  s.block = draft;
   try {
-    const key = hashKey({ block: s.block, passage });
+    setStatus('sd_status3', '草稿已拼好，正在润色…');
+    const rulings = selectedRulings();
+    const key = hashKey({ stage: 'polish', draft, name: s.name, rulings });
     const { data, cached } = await cachedRun(
-      'rewrite',
+      'polish',
       key,
       async () =>
         (
-          await callModel(Prompts.rewrite({ block: s.block, passage }), (chunk) => {
-            el('sd_rewrite').value = chunk;
+          await callModel(Prompts.polishBlock({ draft, name: s.name, rulings }), (chunk) => {
+            el('sd_block').value = chunk;
           })
         ).trim(),
       force
     );
-    s.passage = passage;
-    s.rewrite = data;
-    el('sd_rewrite').value = s.rewrite;
-    setStatus('sd_status4', cached ? '输入没变，用上次结果，未再调用 API。' : '判一下像不像。', 'ok');
-    save();
-  } catch (e) {
-    setStatus('sd_status4', String(e.message || e), 'error');
-  } finally {
-    el('sd_dorewrite').disabled = false;
-    busySteps.delete('rewrite');
-  }
-}
-
-async function runRework(force) {
-  const s = settings();
-  s.block = el('sd_block').value.trim();
-  const passage = el('sd_passage').value.trim();
-  const bad = (s.rewrite || el('sd_rewrite').value || '').trim();
-  if (!s.block) {
-    setStatus('sd_status4', '文风块是空的，先成块。', 'error');
-    return;
-  }
-  if (!passage || !bad) {
-    setStatus('sd_status4', '先跑一次改写再判像不像。', 'error');
-    return;
-  }
-  if (!lockOr('sd_status4', 'rework')) return;
-  cancelled = false;
-  setStatus('sd_status4', '不像，自动修块…');
-  el('sd_unlike').disabled = true;
-  try {
-    const key = hashKey({ stage: 'rework', block: s.block, passage, bad });
-    const { data } = await cachedRun(
-      'rework',
-      key,
-      async () =>
-        (
-          await callModel(Prompts.rework({ block: s.block, passage, badRewrite: bad }), (chunk) => {
-            el('sd_block').value = chunk;
-          })
-        ).trim(),
-      true
-    );
-    s.block = data;
+    const polished = String(data || '').trim();
+    s.block = polished || draft;
     el('sd_block').value = s.block;
-    setStatus('sd_status4', '修好了，再拿一段测。', 'ok');
+    s.confirmed2 = true;
+    setStatus('sd_status3', cached ? '润色命中缓存，未再调用 API。可以拿走了。' : '润色好了，可以拿走；不满意就手改。', 'ok');
+    updateWizard();
     save();
   } catch (e) {
-    setStatus('sd_status4', String(e.message || e), 'error');
+    s.confirmed2 = true;
+    s.block = draft;
+    el('sd_block').value = draft;
+    setStatus('sd_status3', '润色没成，留下本地草稿。原因：' + String(e.message || e), 'error');
+    updateWizard();
+    save();
   } finally {
-    el('sd_unlike').disabled = false;
-    busySteps.delete('rework');
+    if (btn) btn.disabled = false;
+    busySteps.delete('confirm2');
   }
 }
 
@@ -2243,7 +2213,9 @@ function currentSnapshot() {
     passage: s.passage,
     rewrite: s.rewrite,
     verdict: s.verdict,
-    playMode: s.playMode
+    playMode: s.playMode,
+    confirmed1: !!s.confirmed1,
+    confirmed2: !!s.confirmed2
   };
 }
 
@@ -2264,6 +2236,8 @@ function applySnapshot(data) {
   s.rewrite = data.rewrite || '';
   s.verdict = data.verdict || '';
   s.playMode = data.playMode || 'none';
+  s.confirmed1 = data.confirmed1 != null ? !!data.confirmed1 : !!(data.read1 && data.read2);
+  s.confirmed2 = data.confirmed2 != null ? !!data.confirmed2 : !!(data.block && String(data.block).trim());
   restoreLayer();
   save();
 }
@@ -2301,7 +2275,9 @@ function snapshotFromJSON(raw) {
     passage: test.passage || DEFAULT_PASSAGE,
     rewrite: test.rewrite || '',
     verdict: test.verdict || '',
-    playMode: play.mode || 'none'
+    playMode: play.mode || 'none',
+    confirmed1: raw.confirmed1 != null ? !!raw.confirmed1 : !!(read1 && read2),
+    confirmed2: raw.confirmed2 != null ? !!raw.confirmed2 : !!(raw.block && String(raw.block).trim())
   };
 }
 
@@ -2613,16 +2589,15 @@ function renderStyles(selectedId) {
 function wizardState() {
   const s = settings();
   const has1 = !!s.read1;
-  const has2 = !!s.read2;
+  const c1 = !!s.confirmed1;
+  const c2 = !!s.confirmed2;
   const hasBlock = !!(s.block && String(s.block).trim());
-  const maxVisible = hasBlock ? 6 : has2 ? 4 : has1 ? 3 : 1;
-  const current = !has1 ? 1 : !has2 ? 3 : !hasBlock ? 4 : 5;
+  const maxVisible = hasBlock || c2 ? 6 : c1 ? 5 : has1 ? 3 : 1;
+  const current = !has1 ? 1 : !c1 ? 3 : !c2 ? 4 : 6;
   return { maxVisible, current };
 }
 
-// 向导式渐进显示：只露出现阶段该看的区块；完成的步骤变淡
 function updateWizard() {
-  const s = settings();
   const { maxVisible, current } = wizardState();
   document.querySelectorAll('#sd_page_distill [data-wiz]').forEach((wrap) => {
     const w = Number(wrap.dataset.wiz);
@@ -2633,10 +2608,6 @@ function updateWizard() {
     st.classList.toggle('sd-done', n < current);
     st.classList.toggle('sd-cur', n === current);
   });
-  // 「一次读完」模式下后三遍已随读解一并给出、第 4 步自动解锁，
-  // 不再强制点「确认信念」；按钮保留，改完信念仍可手动重跑（输入没变就走缓存）。
-  const btn2 = el('sd_read2');
-  if (btn2 && s.thrifty && s.read2) btn2.title = '一次读完时结果已带上；改过信念再点可按新信念重跑';
 }
 
 function applyModule() {
@@ -2715,8 +2686,6 @@ function restoreLayer() {
   setVal('sd_name', s.name || '');
   setVal('sd_corpus', s.corpus || '');
   try { renderCorpusStat(); } catch (e) { console.warn('[大厨烹饪处] renderCorpusStat', e); }
-  setVal('sd_passage', s.passage || DEFAULT_PASSAGE);
-  setVal('sd_rewrite', s.rewrite || '');
   setVal('sd_block', s.block || '');
   setVal('sd_play', s.playMode || 'none');
   try {
@@ -2799,9 +2768,8 @@ function bindLayer() {
   });
 
   bind('sd_read1', 'click', (e) => runRead1(forceFromEvent(e)));
-  bind('sd_read2', 'click', (e) => runRead2(forceFromEvent(e)));
-  bind('sd_compose', 'click', () => runCompose());
-  bind('sd_dorewrite', 'click', (e) => runRewrite(forceFromEvent(e)));
+  bind('sd_confirm1', 'click', (e) => runConfirm1(forceFromEvent(e)));
+  bind('sd_confirm2', 'click', (e) => runConfirm2(forceFromEvent(e)));
 
   bind('sd_readout', 'click', (e) => {
     const btn = e.target.closest('.sd-refresh');
@@ -2881,7 +2849,6 @@ function bindLayer() {
     }
     applyTakenCorpus(text, '已取 ' + msgs.length + ' 条角色发言（' + text.length + ' 字），可再增删。');
   });
-  bind('sd_passage', 'input', (e) => { settings().passage = e.target.value; save(); });
   bind('sd_block', 'input', (e) => { settings().block = e.target.value; save(); });
   bind('sd_play', 'change', (e) => { settings().playMode = e.target.value; save(); });
 
@@ -2892,24 +2859,6 @@ function bindLayer() {
     el('sd_blackadd').value = '';
     renderBlacklist();
     save();
-  });
-
-  bind('sd_like', 'click', () => {
-    settings().verdict = 'like';
-    setStatus('sd_status4', '像，通过。可以拿走了。', 'ok');
-    const like = el('sd_like');
-    const copy = el('sd_copy');
-    if (like) {
-      like.classList.add('sd-done-flash');
-      setTimeout(() => like.classList.remove('sd-done-flash'), 2400);
-    }
-    if (copy) copy.classList.add('sd-attn');
-    save();
-  });
-  bind('sd_unlike', 'click', () => {
-    settings().verdict = 'unlike';
-    save();
-    runRework();
   });
 
   bind('sd_copy', 'click', async () => {

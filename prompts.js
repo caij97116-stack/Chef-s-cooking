@@ -217,6 +217,34 @@ ${typeof current === "string" ? current : JSON.stringify(current)}
   ];
 }
 
+export function polishBlock({ draft, name, rulings }) {
+  return [
+    {
+      role: "system",
+      content: "你是大厨烹饪处。你直接给成品，不解释。"
+    },
+    {
+      role: "user",
+      content: `下面是一段已经按固定格式拼好的文风块草稿。请润色成可以直接填进提示词或世界书的成品。
+
+要求：
+- 保留结构：标题、核心信念（引用块）、信念、句法纪律、修辞习惯、跟邻居的界、反例、样本。
+- 句子写利落、可执行；括号里的缺失提示若对应信息确实没有，就删掉空话，写得干脆。
+- 不出现“技法 / 养成 / 层次 / DNA / 蒸馏”这类词。
+- 不解释、不寒暄、不加前后缀。
+- 反例至少 6 条。
+- 拿不准的地方按用户的决定写进正文，不要另起一段说明。
+- 名字尊重用户给的：${name || "（未给，尊重草稿标题）"}
+
+【草稿】
+${draft}
+
+【拿不准与你的决定】
+${rulings || "（无）"}`
+    }
+  ];
+}
+
 export function compose({ name, genre, read1, read2, samples, blacklist, rulings }) {
   const syntax = read1.syntax || {};
   const object = read1.object || {};
