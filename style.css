@@ -114,6 +114,37 @@
   font-weight: 600;
 }
 
+.sd-tab.sd-tab-alert {
+  border-color: #c45c5c;
+  color: #c45c5c;
+  opacity: 1;
+}
+
+.sd-tab.sd-on.sd-tab-alert {
+  background: #a94444;
+  border-color: transparent;
+  color: #fff;
+}
+
+.sd-badge {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #c45c5c;
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 700;
+  line-height: 1.4;
+  vertical-align: 1px;
+}
+
+.sd-tab.sd-on .sd-badge {
+  background: #fff;
+  color: #a94444;
+}
+
 /* ---------- 向导步骤条 ---------- */
 
 .sd-steps {
@@ -514,6 +545,44 @@
   gap: 6px;
   margin-bottom: 8px;
 }
+
+/* ---------- 体检 ---------- */
+
+.sd-watch-summary {
+  margin-top: 8px;
+}
+
+.sd-watch-head {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.sd-watch-ok { color: #7bbf6a; }
+.sd-watch-bad { color: #e06a6a; }
+
+.sd-watch-issue {
+  background: rgba(196, 92, 92, 0.16);
+  border-left: 3px solid #c45c5c;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  font-size: 0.9em;
+}
+
+.sd-watch-row {
+  background: var(--sd-card);
+  border-radius: 8px;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  border-left: 3px solid transparent;
+}
+
+.sd-watch-name { font-weight: 600; }
+
+.sd-watch-hit { border-left-color: #7bbf6a; }
+.sd-watch-miss { border-left-color: #c45c5c; }
+.sd-watch-mark { border-left-color: var(--sd-accent, #4a90d9); }
+.sd-watch-skip { opacity: 0.65; }
 
 /* ---------- 手机端 ---------- */
 

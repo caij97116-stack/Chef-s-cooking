@@ -50,6 +50,7 @@ const defaultSettings = Object.freeze({
   voice: { corpus: '', entry: '' },
   polish: { description: '', personality: '', scenario: '' },
   lore: { mode: 'card', source: '', query: '', snippets: '', hint: '', count: '3', entries: [] },
+  watch: { auto: true },
   cache: {},
   stats: { calls: 0, tokens: 0, saved: 0 }
 });
@@ -88,6 +89,7 @@ const panelTpl = `
       <button class="sd-tab" id="sd_tab_voice" data-mod="voice">🗣 说话腔</button>
       <button class="sd-tab" id="sd_tab_polish" data-mod="polish">✨ 卡片润色</button>
       <button class="sd-tab" id="sd_tab_lore" data-mod="lore">📚 世界书</button>
+      <button class="sd-tab" id="sd_tab_watch" data-mod="watch">🩺 体检<span class="sd-badge" id="sd_watch_badge"></span></button>
     </div>
 
     <div class="sd-page" id="sd_page_distill">
@@ -479,6 +481,27 @@ const panelTpl = `
         <div id="sd_lo_wistatus" class="sd-status"></div>
       </div>
     </div>
+
+    <div class="sd-page" id="sd_page_watch" style="display:none">
+      <div class="sd-sec">
+        <div class="sd-sec-title">这一轮进没进请求</div>
+        <div class="sd-note">报告范围是上一轮请求里有没有带上世界书和预设正文。勾选只代表打算用，真正进请求才算用上。</div>
+        <label class="sd-check"><input id="sd_watch_auto" type="checkbox"> <span>边玩边检（每次真正发一轮就刷）</span></label>
+        <div class="sd-actions">
+          <button id="sd_watch_go" class="menu_button sd-primary">检这一轮</button>
+          <span id="sd_watch_status" class="sd-status"></span>
+        </div>
+        <div id="sd_watch_summary" class="sd-watch-summary"></div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">世界书<span class="sd-hint">按扫描结果列触发原因</span></div>
+        <div id="sd_watch_wi"><div class="sd-note">还没有抓到扫描结果。先发一轮对话。</div></div>
+      </div>
+      <div class="sd-sec">
+        <div class="sd-sec-title">预设 / Prompt<span class="sd-hint">勾选对照上一轮请求</span></div>
+        <div id="sd_watch_pm"><div class="sd-note">还没有抓到拼装结果。</div></div>
+      </div>
+    </div>
   </div>
 </div>`;
 
@@ -526,6 +549,8 @@ function settings() {
     if (s.opening.personaCustom == null) s.opening.personaCustom = '';
     if (!Array.isArray(s.opening.worldbooks)) s.opening.worldbooks = [];
   }
+  if (!s.watch) s.watch = { auto: true };
+  if (s.watch.auto == null) s.watch.auto = true;
   return s;
 }
 
@@ -2586,6 +2611,396 @@ function renderStyles(selectedId) {
   if (keep && list.some((it) => it.id === keep)) sel.value = keep;
 }
 
+const WATCH_MARKERS = {
+  chatHistory: '聊天记录',
+  worldInfoBefore: '世界书（角色前）',
+  worldInfoAfter: '世界书（角色后）',
+  charDescription: '角色描述',
+  charPersonality: '角色性格',
+  scenario: '场景',
+  personaDescription: '用户人设',
+  dialogueExamples: '示例对白',
+  main: '主提示',
+  nsfw: 'NSFW',
+  jailbreak: '越狱',
+  enhanceDefinitions: '增强设定'
+};
+
+let watchSnap = {
+  at: 0,
+  dry: false,
+  kind: '',
+  hay: '',
+  wiFinal: false,
+  wi: { activated: [], overflowed: false, budget: 0, loop: 0 },
+  issues: []
+};
+let watchHooked = false;
+
+function watchAutoOn() {
+  try {
+    return settings().watch && settings().watch.auto !== false;
+  } catch (e) {
+    return true;
+  }
+}
+
+function asEntryList(raw) {
+  if (!raw) return [];
+  if (typeof raw.values === 'function') return Array.from(raw.values()).filter(Boolean);
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  if (typeof raw === 'object') return Object.values(raw).filter(Boolean);
+  return [];
+}
+
+function wiReason(entry) {
+  if (!entry) return '';
+  if (entry.constant) return '常驻';
+  if (entry.vectorized) return '向量命中';
+  const keys = [].concat(entry.key || []).map((k) => String(k || '').trim()).filter(Boolean);
+  if (keys.length) return '关键词：' + keys.slice(0, 4).join(' / ');
+  return '扫描命中';
+}
+
+function wiLabel(entry) {
+  if (!entry) return '条目';
+  const name = String(entry.comment || '').trim();
+  if (name) return name;
+  const k = [].concat(entry.key || []).map((x) => String(x || '').trim()).filter(Boolean)[0];
+  if (k) return k;
+  return '条目 ' + (entry.uid != null ? entry.uid : '?');
+}
+
+function flattenPromptText(payload) {
+  if (payload == null) return '';
+  if (typeof payload === 'string') return payload;
+  if (Array.isArray(payload)) {
+    return payload.map((m) => {
+      if (!m) return '';
+      if (typeof m === 'string') return m;
+      if (typeof m.content === 'string') return m.content;
+      if (Array.isArray(m.content)) {
+        return m.content.map((p) => {
+          if (!p) return '';
+          if (typeof p === 'string') return p;
+          return String(p.text || p.content || '');
+        }).join('\n');
+      }
+      return '';
+    }).join('\n');
+  }
+  if (typeof payload.prompt === 'string') return payload.prompt;
+  if (Array.isArray(payload.chat)) return flattenPromptText(payload.chat);
+  return '';
+}
+
+function stripMacros(s) {
+  return String(s || '').replace(/\{\{[\s\S]*?\}\}/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function hayHas(hay, needle) {
+  const n = stripMacros(needle);
+  if (!n) return false;
+  const h = stripMacros(hay);
+  const piece = n.length > 80 ? n.slice(0, 80) : n;
+  if (piece.length < 6) return h.indexOf(piece) !== -1;
+  return h.indexOf(piece) !== -1;
+}
+
+function listEnabledPrompts() {
+  try {
+    const c = ctx();
+    const oai = c.chatCompletionSettings;
+    if (!oai || !Array.isArray(oai.prompts)) return [];
+    const byId = {};
+    oai.prompts.forEach((p) => {
+      if (p && p.identifier) byId[p.identifier] = p;
+    });
+    const orders = Array.isArray(oai.prompt_order) ? oai.prompt_order : [];
+    let orderList = [];
+    if (orders.length) {
+      const cid = c.characterId;
+      const byChar = cid != null ? orders.find((x) => String(x.character_id) === String(cid)) : null;
+      const dummy = orders.find((x) => String(x.character_id) === '100001' || String(x.character_id) === '100000');
+      orderList = ((byChar || dummy || orders[0]).order) || [];
+    }
+    if (orderList.length) {
+      return orderList.map((ref) => {
+        const p = byId[ref.identifier] || {};
+        return {
+          identifier: ref.identifier,
+          name: p.name || WATCH_MARKERS[ref.identifier] || ref.identifier,
+          enabled: !!ref.enabled,
+          marker: !!p.marker,
+          content: p.content || ''
+        };
+      });
+    }
+    return oai.prompts.filter(Boolean).map((p) => ({
+      identifier: p.identifier,
+      name: p.name || WATCH_MARKERS[p.identifier] || p.identifier,
+      enabled: p.enabled !== false,
+      marker: !!p.marker,
+      content: p.content || ''
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+function diagnoseWatch() {
+  const issues = [];
+  const wi = watchSnap.wi || { activated: [], overflowed: false, budget: 0 };
+  if (wi.overflowed) {
+    issues.push({
+      level: 'red',
+      text: '世界书预算满了，后面本该进的条目被丢掉了。去「世界信息」加大预算，或关掉不常用的条目。'
+    });
+  }
+  const hay = watchSnap.hay || '';
+  (wi.activated || []).forEach((en) => {
+    const body = String(en.content || '').trim();
+    if (!body) {
+      issues.push({
+        level: 'red',
+        text: '条目「' + wiLabel(en) + '」触发了，但正文是空的。'
+      });
+      return;
+    }
+    if (hay && !hayHas(hay, body)) {
+      issues.push({
+        level: 'red',
+        text: '条目「' + wiLabel(en) + '」扫描命中了，上一轮请求里找不到这段。预算、插入位置或格式模板都可能把它挤掉。'
+      });
+    }
+  });
+  const prompts = listEnabledPrompts();
+  if (hay && prompts.length) {
+    prompts.forEach((p) => {
+      if (!p.enabled) return;
+      if (p.marker) return;
+      const body = String(p.content || '').trim();
+      if (!body) {
+        issues.push({
+          level: 'red',
+          text: '预设「' + (p.name || p.identifier) + '」勾了，但内容是空的。'
+        });
+        return;
+      }
+      if (!stripMacros(body)) return;
+      if (!hayHas(hay, body)) {
+        issues.push({
+          level: 'red',
+          text: '预设「' + (p.name || p.identifier) + '」勾了，上一轮请求里找不到这段。位置、深度或宏替换都可能让它对不上。'
+        });
+      }
+    });
+  }
+  watchSnap.issues = issues;
+  return issues;
+}
+
+function ingestWiScan(args) {
+  if (!args) return;
+  const next = args.state && args.state.next;
+  const entries = asEntryList(args.activated && args.activated.entries);
+  watchSnap.wi = {
+    activated: entries.map((en) => ({
+      uid: en.uid,
+      world: en.world,
+      comment: en.comment,
+      key: [].concat(en.key || []),
+      constant: !!en.constant,
+      vectorized: !!en.vectorized,
+      content: en.content || '',
+      disable: !!en.disable
+    })),
+    overflowed: !!(args.budget && args.budget.overflowed),
+    budget: args.budget && args.budget.current != null ? args.budget.current : 0,
+    loop: args.state && args.state.loopCount != null ? args.state.loopCount : 0
+  };
+  watchSnap.wiFinal = next === 0 || next == null;
+  watchSnap.at = Date.now();
+  diagnoseWatch();
+  if (watchAutoOn()) renderWatch();
+}
+
+function ingestWiActivated(list) {
+  const entries = asEntryList(list);
+  if (!entries.length) return;
+  watchSnap.wi.activated = entries.map((en) => ({
+    uid: en.uid,
+    world: en.world,
+    comment: en.comment,
+    key: [].concat(en.key || []),
+    constant: !!en.constant,
+    vectorized: !!en.vectorized,
+    content: en.content || '',
+    disable: !!en.disable
+  }));
+  watchSnap.at = Date.now();
+  diagnoseWatch();
+  if (watchAutoOn()) renderWatch();
+}
+
+function ingestPrompt(kind, payload) {
+  if (payload && payload.dryRun) {
+    if (!watchSnap.at || watchSnap.dry) {
+      watchSnap.dry = true;
+      watchSnap.kind = kind;
+      watchSnap.hay = flattenPromptText(payload) || watchSnap.hay;
+      watchSnap.at = watchSnap.at || Date.now();
+      diagnoseWatch();
+    }
+    return;
+  }
+  watchSnap.dry = false;
+  watchSnap.kind = kind;
+  watchSnap.hay = flattenPromptText(payload);
+  watchSnap.at = Date.now();
+  diagnoseWatch();
+  if (watchAutoOn()) renderWatch();
+}
+
+function watchTime() {
+  if (!watchSnap.at) return '';
+  const d = new Date(watchSnap.at);
+  const p = (n) => (n < 10 ? '0' : '') + n;
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function renderWatchBadge() {
+  const badge = el('sd_watch_badge');
+  const tab = el('sd_tab_watch');
+  const n = (watchSnap.issues || []).length;
+  if (badge) {
+    badge.textContent = n ? String(n) : '';
+    badge.style.display = n ? '' : 'none';
+  }
+  if (tab) tab.classList.toggle('sd-tab-alert', n > 0);
+}
+
+function renderWatch() {
+  renderWatchBadge();
+  const sum = el('sd_watch_summary');
+  const wiBox = el('sd_watch_wi');
+  const pmBox = el('sd_watch_pm');
+  if (!sum || !wiBox || !pmBox) return;
+  const issues = watchSnap.issues || [];
+  const when = watchTime();
+  if (!watchSnap.at) {
+    sum.innerHTML = '<div class="sd-note">还没有抓到上一轮。先正常发一条，或等酒馆拼完提示词。</div>';
+  } else {
+    const kind = watchSnap.kind === 'chat' ? '聊天补全' : watchSnap.kind === 'text' ? '文本补全' : '未知接口';
+    const head = when
+      ? '上一轮 ' + when + ' · ' + kind + (watchSnap.dry ? '（预演，还没真正发出）' : '')
+      : '';
+    if (issues.length) {
+      sum.innerHTML =
+        '<div class="sd-watch-head sd-watch-bad">' + esc(head) + ' · ' + issues.length + ' 处要对一下</div>' +
+        issues.map((it) => '<div class="sd-watch-issue">' + esc(it.text) + '</div>').join('');
+    } else {
+      sum.innerHTML = '<div class="sd-watch-head sd-watch-ok">' + esc(head) + ' · 勾上的预设和触发的世界书，上一轮请求里都对得上。</div>';
+    }
+  }
+
+  const activated = (watchSnap.wi && watchSnap.wi.activated) || [];
+  if (!activated.length && !watchSnap.at) {
+    wiBox.innerHTML = '<div class="sd-note">还没有抓到扫描结果。先发一轮对话。</div>';
+  } else if (!activated.length) {
+    const extra = watchSnap.wi && watchSnap.wi.overflowed ? '<div class="sd-watch-issue">预算已满，一条都没装进。</div>' : '';
+    wiBox.innerHTML = '<div class="sd-note">这一轮没有世界书条目被激活。</div>' + extra;
+  } else {
+    const over = watchSnap.wi.overflowed
+      ? '<div class="sd-watch-issue">预算溢出（上限约 ' + esc(String(watchSnap.wi.budget || '')) + '）。后面的条目没装进。</div>'
+      : '';
+    const hay = watchSnap.hay || '';
+    wiBox.innerHTML = over + activated.map((en) => {
+      const body = String(en.content || '').trim();
+      const empty = !body;
+      const missed = !empty && hay && !hayHas(hay, body);
+      const cls = empty || missed ? ' sd-watch-miss' : ' sd-watch-hit';
+      const extra = empty ? ' · 正文空' : missed ? ' · 请求里找不到' : hay ? ' · 请求里有' : '';
+      return (
+        '<div class="sd-watch-row' + cls + '">' +
+        '<div class="sd-watch-name">' + esc(wiLabel(en)) + (en.world ? ' · ' + esc(en.world) : '') + '</div>' +
+        '<div class="sd-meta">' + esc(wiReason(en) + extra) + '</div></div>'
+      );
+    }).join('');
+  }
+
+  const prompts = listEnabledPrompts();
+  const hay = watchSnap.hay || '';
+  if (!prompts.length) {
+    if (hay) {
+      pmBox.innerHTML = '<div class="sd-note">当前不是聊天补全预设（或读不到 Prompt Manager）。已抓到上一轮提示词 ' + hay.length + ' 字，只能做世界书对照。</div>';
+    } else {
+      pmBox.innerHTML = '<div class="sd-note">还没有抓到拼装结果。聊天补全会在发一轮后出现勾选对照。</div>';
+    }
+  } else {
+    pmBox.innerHTML = prompts.map((p) => {
+      const body = String(p.content || '').trim();
+      let state = 'skip';
+      let note = '没勾';
+      if (p.enabled && p.marker) {
+        state = 'mark';
+        note = '占位（酒馆现场填）';
+      } else if (p.enabled && !body) {
+        state = 'miss';
+        note = '勾了，内容空';
+      } else if (p.enabled && !stripMacros(body)) {
+        state = 'mark';
+        note = '勾了，几乎全是宏，没法对字';
+      } else if (p.enabled && !hay) {
+        state = 'skip';
+        note = '勾了，还没抓到上一轮请求';
+      } else if (p.enabled && hayHas(hay, body)) {
+        state = 'hit';
+        note = '勾了，上一轮请求里有';
+      } else if (p.enabled) {
+        state = 'miss';
+        note = '勾了，上一轮请求里找不到';
+      }
+      return (
+        '<div class="sd-watch-row sd-watch-' + state + '">' +
+        '<div class="sd-watch-name">' + esc(p.name || p.identifier) + '</div>' +
+        '<div class="sd-meta">' + esc(note) + '</div></div>'
+      );
+    }).join('');
+  }
+}
+
+function bindWatchEvents() {
+  if (watchHooked) return true;
+  try {
+    const c = ctx();
+    const es = c.eventSource;
+    const et = c.event_types || c.eventTypes || {};
+    if (!es || typeof es.on !== 'function') return false;
+    const scan = et.WORLDINFO_SCAN_DONE || 'worldinfo_scan_done';
+    const activated = et.WORLD_INFO_ACTIVATED || 'world_info_activated';
+    const chatReady = et.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready';
+    const textReady = et.GENERATE_AFTER_COMBINE_PROMPTS || 'generate_after_combine_prompts';
+    es.on(scan, (args) => {
+      try { ingestWiScan(args); } catch (e) { console.warn('[大厨烹饪处] 体检世界书扫描', e); }
+    });
+    es.on(activated, (list) => {
+      try { ingestWiActivated(list); } catch (e) { console.warn('[大厨烹饪处] 体检世界书激活', e); }
+    });
+    es.on(chatReady, (data) => {
+      try { ingestPrompt('chat', data); } catch (e) { console.warn('[大厨烹饪处] 体检聊天补全', e); }
+    });
+    es.on(textReady, (data) => {
+      try { ingestPrompt('text', data); } catch (e) { console.warn('[大厨烹饪处] 体检文本补全', e); }
+    });
+    watchHooked = true;
+    return true;
+  } catch (e) {
+    console.warn('[大厨烹饪处] 体检事件挂钩失败', e);
+    return false;
+  }
+}
+
 function wizardState() {
   const s = settings();
   const has1 = !!s.read1;
@@ -2610,24 +3025,25 @@ function updateWizard() {
   });
 }
 
+const MODULES = ['opening', 'remsg', 'voice', 'polish', 'lore', 'watch'];
+
 function applyModule() {
   const s = settings();
-  const MODS = ['opening', 'remsg', 'voice', 'polish', 'lore'];
-  const mod = MODS.includes(s.activeModule) ? s.activeModule : 'distill';
+  const mod = MODULES.includes(s.activeModule) ? s.activeModule : 'distill';
   document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
     t.classList.toggle('sd-on', t.dataset.mod === mod);
   });
-  ['distill', ...MODS].forEach((m) => {
+  ['distill', ...MODULES].forEach((m) => {
     const page = el('sd_page_' + m);
     if (page) page.style.display = m === mod ? '' : 'none';
   });
   if (mod === 'distill') updateWizard();
+  if (mod === 'watch') renderWatch();
 }
 
 function switchModule(mod) {
   const s = settings();
-  const MODS = ['opening', 'remsg', 'voice', 'polish', 'lore'];
-  s.activeModule = MODS.includes(mod) ? mod : 'distill';
+  s.activeModule = MODULES.includes(mod) ? mod : 'distill';
   save();
   applyModule();
 }
@@ -2734,6 +3150,10 @@ function restoreLayer() {
     loModeUI();
     renderLoreEntries();
   } catch (e) { console.warn('[大厨烹饪处] lore 字段恢复失败', e); }
+  try {
+    setVal('sd_watch_auto', settings().watch.auto !== false, 'checked');
+    renderWatch();
+  } catch (e) { console.warn('[大厨烹饪处] watch 字段恢复失败', e); }
   try { applyModule(); } catch (e) { console.warn('[大厨烹饪处] applyModule', e); }
 }
 
@@ -2765,6 +3185,18 @@ function bind(id, event, fn) {
 function bindLayer() {
   document.querySelectorAll('#sd_tabs .sd-tab').forEach((t) => {
     t.addEventListener('click', () => switchModule(t.dataset.mod));
+  });
+
+  bind('sd_watch_auto', 'change', (e) => {
+    settings().watch.auto = e.target.checked;
+    save();
+  });
+  bind('sd_watch_go', 'click', () => {
+    diagnoseWatch();
+    renderWatch();
+    if (!watchSnap.at) setStatus('sd_watch_status', '还没有抓到上一轮。先发一条再点。', 'error');
+    else if ((watchSnap.issues || []).length) setStatus('sd_watch_status', '这一轮有 ' + watchSnap.issues.length + ' 处要对一下。', 'error');
+    else setStatus('sd_watch_status', '勾上的预设和触发的世界书，上一轮请求里都对得上。', 'ok');
   });
 
   bind('sd_read1', 'click', (e) => runRead1(forceFromEvent(e)));
@@ -3234,6 +3666,7 @@ function addUI() {
   } catch (e) {
     console.error('[大厨烹饪处] 挂载设置项失败', e);
   }
+  try { bindWatchEvents(); } catch (e) { /* 下一轮再挂 */ }
   bootTries += 1;
   if (layerMounted && menuMounted && settingsMounted && bootTimer) {
     clearInterval(bootTimer);
@@ -3257,6 +3690,7 @@ function bindAppEvents() {
     es.on(ready, addUI);
     if (inited) es.on(inited, addUI);
     if (firstLoad) es.on(firstLoad, addUI);
+    bindWatchEvents();
     return true;
   } catch (e) {
     console.warn('[大厨烹饪处] 事件挂钩失败，改用轮询', e);
@@ -3281,6 +3715,7 @@ function startBootstrap() {
     console.error('[大厨烹饪处] 迁移 Key 失败', e);
   }
   bindAppEvents();
+  bindWatchEvents();
   addUI();
   if (!bootTimer) bootTimer = setInterval(addUI, 500);
   // 保险：菜单容器可能要等顶栏渲染完，2.5 秒后再补一次
